@@ -17,7 +17,7 @@
 # 4) The resulting intersection buffers may require some
 #    MANUAL CLEANUP or TWEAKING before further use.
 # ============================================================
-
+ 
 import os
 from qgis.core import (
     QgsProject,

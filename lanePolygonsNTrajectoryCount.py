@@ -11,7 +11,7 @@ INSTRUCTIONS FOR USER:
 3.  If CLIP_TO_STUDY_AREA is True, the trajectories layer will be clipped to the size of the study area.    
 4.  If SCALING_ENABLED is True, results will be multiplied by the SCALING_FACTOR.
 """
-
+ 
 print("--- Script Loaded. Initializing... ---")
 
 import os
