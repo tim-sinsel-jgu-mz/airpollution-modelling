@@ -5,8 +5,8 @@ import os
 #  USER SETTINGS - EDIT THIS SECTION
 # ==========================================
 
-INPUT_FILE_NAME = 'temp_humid_solar_wind_merge4.csv'
-OUTPUT_FILE_NAME = 'merge4_2021_Jun_Nov.csv'
+INPUT_FILE_NAME = 'merge5.csv'
+OUTPUT_FILE_NAME = 'merge5__clean_2019_Jun_Nov.csv'
 
 DATETIME_COLUMN = 'Merged_Timestamp'
 REMOVE_ORIGINAL_DATETIME_COLUMN = True
@@ -16,8 +16,8 @@ REMOVE_ORIGINAL_DATETIME_COLUMN = True
 # ------------------------------------------
 
 ENABLE_DATE_RANGE_CLIP = True
-CLIP_START_DATETIME = '202106010000'
-CLIP_END_DATETIME   = '202111302350'
+CLIP_START_DATETIME = '201906010000'
+CLIP_END_DATETIME   = '201911302350'
 
 
 # ------------------------------------------
@@ -27,6 +27,18 @@ CLIP_END_DATETIME   = '202111302350'
 ENABLE_TIME_CONTINUITY_CHECK = True
 EXPECTED_TIME_STEP_MINUTES = 10
 STOP_ON_TIME_DISCONTINUITY = True
+
+# ------------------------------------------
+# Time zone conversion
+# ------------------------------------------
+
+ENABLE_TIMEZONE_SHIFT = True
+
+# Input and target time zones
+# Examples: "UTC", "UTC+1", "UTC-2", "UTC+10"
+INPUT_TIMEZONE = "UTC"
+TARGET_TIMEZONE = "UTC+1"
+
 
 
 # ------------------------------------------
@@ -253,7 +265,41 @@ def split_datetime_column():
 
         if REMOVE_ORIGINAL_DATETIME_COLUMN:
             df.drop(columns=[DATETIME_COLUMN], inplace=True)
+        
+        # --------------------------------------------------
+        # Time zone shift (UTC offset based)
+        # --------------------------------------------------
+        if ENABLE_TIMEZONE_SHIFT:
+            print(f"Shifting time zone from {INPUT_TIMEZONE} to {TARGET_TIMEZONE}...")
 
+            def parse_utc_offset(tz_str):
+                if tz_str == "UTC":
+                    return 0
+                if tz_str.startswith("UTC"):
+                    return int(tz_str.replace("UTC", ""))
+                raise ValueError(
+                    "Invalid timezone format. Use 'UTC', 'UTC+1', 'UTC-2', etc."
+                )
+
+            input_offset = parse_utc_offset(INPUT_TIMEZONE)
+            target_offset = parse_utc_offset(TARGET_TIMEZONE)
+
+            hour_shift = target_offset - input_offset
+
+            # Combine Date and Time into datetime
+            dt = pd.to_datetime(
+                df['Date'] + ' ' + df['Time'],
+                format='%d.%m.%Y %H:%M:%S'
+            )
+
+            # Apply shift
+            dt = dt + pd.to_timedelta(hour_shift, unit='h')
+
+            # Split back into Date and Time
+            df['Date'] = dt.dt.strftime('%d.%m.%Y')
+            df['Time'] = dt.dt.strftime('%H:%M:%S')
+
+        
         # --------------------------------------------------
         # Air temperature unit conversion
         # --------------------------------------------------
