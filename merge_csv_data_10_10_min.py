@@ -7,23 +7,23 @@ import sys
 # ==========================================
 
 # 1. Input File Names (Must be in the same folder as this script)
-FILE_1_NAME = 'temp_humid_solar_merge4.csv'
-FILE_2_NAME = 'general_10_433_wind.csv'
+FILE_1_NAME = 'merge7_T_RF_W.csv' 
+FILE_2_NAME = 'general_10_427_solar_hist_bis202412.csv'
 
 # 2. Output File Name
-OUTPUT_FILE_NAME = 'temp_humid_solar_wind_merge4.csv'
+OUTPUT_FILE_NAME = 'merge7_T_RF_W_S.csv'
 
 # 3. Date Time Column Headers (The name of the column containing YYYYMMDDHHMM)
 #    Change these if they are different in your files.
-TIME_COL_1 = 'Merged_Timestamp'
+TIME_COL_1 = 'MESS_DATUM'
 TIME_COL_2 = 'MESS_DATUM'
 
 # 4. Columns to Keep
 #    List the specific columns you want from each file.
 #    Leave the list empty [] if you want to keep ALL columns from that file. # WARNING: Do NOT leave empty, that doesn't work!
 #    NOTE: Do not include the Time Column here; the script handles that automatically.
-COLS_TO_KEEP_FILE_1 = ['TT_ST_10', 'RF_ST_10', 'DS_10', 'LS_10', 'GS_10']
-COLS_TO_KEEP_FILE_2 = ['FF_10', 'DD_10']
+COLS_TO_KEEP_FILE_1 = ['TT_ST_10', 'RF_ST_10', 'FF_10', 'DD_10']   #'TT_ST_10', 'RF_ST_10', 'DS_10', 'LS_10', 'GS_10', 'FF_10', 'DD_10'
+COLS_TO_KEEP_FILE_2 = ['DS_10', 'LS_10', 'GS_10']
 
 # 5. CSV format settings
 # This script outputs like this: SEPARATOR = ','; DECIMAL = '.'; ENCODING = 'utf-8'
@@ -36,6 +36,10 @@ FILE_2_SEPARATOR = ';'
 FILE_2_DECIMAL = '.'
 FILE_2_ENCODING = 'utf-8'
 
+OUTPUT_SEPARATOR = ','
+OUTPUT_DECIMAL = '.'
+OUTPUT_ENCODING = 'utf-8'
+OUTPUT_NA_REP = ''      
 
 # ==========================================
 #  END OF SETTINGS
@@ -152,12 +156,19 @@ def merge_csvs():
         # Format the timestamp back to the original YYYYMMDDHHMM format if desired,
         # or keep it as standard ISO format. Here we convert back to string as per input style.
         # usually usually 'MESS_DATUM'
-        merged_df.rename(columns={'timestamp_dt': 'Merged_Timestamp'}, inplace=True)
-        merged_df['Merged_Timestamp'] = merged_df['Merged_Timestamp'].dt.strftime('%Y%m%d%H%M')
+        merged_df.rename(columns={'timestamp_dt': 'MESS_DATUM'}, inplace=True)
+        merged_df['MESS_DATUM'] = merged_df['MESS_DATUM'].dt.strftime('%Y%m%d%H%M')
 
         # 9. Save Output
         print(f"Writing output to {OUTPUT_FILE_NAME}...")
-        merged_df.to_csv(OUTPUT_FILE_NAME, index=False)
+        merged_df.to_csv(
+            OUTPUT_FILE_NAME,
+            index=False,
+            sep=OUTPUT_SEPARATOR,
+            decimal=OUTPUT_DECIMAL,
+            encoding=OUTPUT_ENCODING,
+            na_rep=OUTPUT_NA_REP
+        )
         print("Success! Merge complete.")
 
     except Exception as e:
