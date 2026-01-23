@@ -1,14 +1,17 @@
 import pandas as pd
+import numpy as np
+import sys
 import os
+
 
 # ==========================================
 #  USER SETTINGS - EDIT THIS SECTION
 # ==========================================
 
-INPUT_FILE_NAME = 'merge5.csv'
-OUTPUT_FILE_NAME = 'merge5__clean_2019_Jun_Nov.csv'
+INPUT_FILE_NAME = 'merge7_T_RF_W_S.csv'
+OUTPUT_FILE_NAME = 'merge7_clean_2024_Jun_Nov_smthWind.csv'
 
-DATETIME_COLUMN = 'Merged_Timestamp'
+DATETIME_COLUMN = 'MESS_DATUM'
 REMOVE_ORIGINAL_DATETIME_COLUMN = True
 
 # ------------------------------------------
@@ -16,8 +19,8 @@ REMOVE_ORIGINAL_DATETIME_COLUMN = True
 # ------------------------------------------
 
 ENABLE_DATE_RANGE_CLIP = True
-CLIP_START_DATETIME = '201906010000'
-CLIP_END_DATETIME   = '201911302350'
+CLIP_START_DATETIME = '202406010000'
+CLIP_END_DATETIME   = '202411302350'
 
 
 # ------------------------------------------
@@ -150,7 +153,7 @@ STOP_ON_NEGATIVE_RADIATION = False
 
 
 # ------------------------------------------
-# Wind data sanitization (FOX compatibility)
+# Wind data sanitization (FOX compatibility)    #vermutlich nicht notwendig
 # ------------------------------------------
 
 ENABLE_WIND_DIRECTION_SANITIZATION = False
@@ -158,6 +161,38 @@ ENABLE_ZERO_WIND_SPEED_FIX = False
 ZERO_WIND_REPLACEMENT_VALUE = 0.1
 WINDSPEED_COLUMN_NAME = 'FF_10'     # alternativ FF_ST_10
 WINDDIRECTION_COLUMN_NAME = 'DD_10'     #alternativ DD_ST_10
+
+
+# ------------------------------------------
+# Wind speed smoothing (moving average)
+# ------------------------------------------
+
+ENABLE_WIND_SPEED_SMOOTHING = True
+
+# Name der Windgeschwindigkeits-Spalte
+WIND_SPEED_COLUMN = 'FF_10'
+
+# Fenstergröße (Anzahl Zeilen für gleitendes Mittel)
+# Bei 10-Minuten-Daten:
+# 3  = 30 Minuten
+# 5  = 50 Minuten etc.
+WIND_SMOOTHING_WINDOW = 12
+
+# ------------------------------------------
+# Wind direction smoothing (vector-based, moving average)
+# ------------------------------------------
+
+ENABLE_WIND_DIRECTION_SMOOTHING = True
+
+# Name der Windrichtungs-Spalte (Grad, 0–360)
+WIND_DIRECTION_COLUMN = 'DD_10'
+
+# Fenstergröße (Anzahl Zeilen)
+# Bei 10-Minuten-Daten:
+# 3  = 30 Minuten
+# 6  = 60 Minuten etc.
+WIND_DIRECTION_SMOOTHING_WINDOW = 12
+
 
 # ------------------------------------------
 # Optional precipitation column
@@ -443,11 +478,86 @@ def split_datetime_column():
         # Replace zero wind speed values (FOX workaround)
         # --------------------------------------------------
         if ENABLE_ZERO_WIND_SPEED_FIX:
-            if WINDDIRECTION_COLUMN_NAME in df.columns:
+            if WINDSPEED_COLUMN_NAME in df.columns:
                 zero_count = (df[WINDSPEED_COLUMN_NAME] == 0).sum()
                 if zero_count > 0:
                     print(f"Replacing {zero_count} zero wind speed values with {ZERO_WIND_REPLACEMENT_VALUE}...")
                     df.loc[df[WINDSPEED_COLUMN_NAME] == 0, WINDSPEED_COLUMN_NAME] = ZERO_WIND_REPLACEMENT_VALUE
+                    
+        # --------------------------------------------------
+        # Wind speed smoothing using moving average
+        # --------------------------------------------------
+        if ENABLE_WIND_SPEED_SMOOTHING:
+            if WIND_SPEED_COLUMN not in df.columns:
+                print(f"Warning: wind speed column '{WIND_SPEED_COLUMN}' not found, skipping smoothing.")
+            else:
+                print(
+                    f"Smoothing wind speed column '{WIND_SPEED_COLUMN}' "
+                    f"using moving average (window={WIND_SMOOTHING_WINDOW})..."
+                )
+
+                df[WIND_SPEED_COLUMN] = (
+                    df[WIND_SPEED_COLUMN]
+                    .rolling(
+                        window=WIND_SMOOTHING_WINDOW,
+                        center=True,
+                        min_periods=1
+                    )
+                    .mean()
+                )
+
+        # --------------------------------------------------
+        # Wind direction smoothing using vector averaging
+        # --------------------------------------------------
+        if ENABLE_WIND_DIRECTION_SMOOTHING:
+            if WIND_DIRECTION_COLUMN not in df.columns:
+                print(
+                    f"Warning: wind direction column '{WIND_DIRECTION_COLUMN}' "
+                    "not found, skipping direction smoothing."
+                )
+            else:
+                print(
+                    f"Smoothing wind direction column '{WIND_DIRECTION_COLUMN}' "
+                    f"using vector-based moving average (window={WIND_DIRECTION_SMOOTHING_WINDOW})..."
+                )
+
+                # --- Temporäre, eindeutig benannte Variablen ---
+                _wd_rad_tmp = np.deg2rad(df[WIND_DIRECTION_COLUMN])
+
+                # Meteorologische Konvention:
+                # Richtung = Richtung, AUS DER der Wind kommt
+                # u = -sin(theta), v = -cos(theta)
+                _u_tmp = -np.sin(_wd_rad_tmp)
+                _v_tmp = -np.cos(_wd_rad_tmp)
+
+                # Gleitendes Mittel auf Komponenten
+                _u_smooth_tmp = (
+                    _u_tmp
+                    .rolling(
+                        window=WIND_DIRECTION_SMOOTHING_WINDOW,
+                        center=True,
+                        min_periods=1
+                    )
+                    .mean()
+                )
+
+                _v_smooth_tmp = (
+                    _v_tmp
+                    .rolling(
+                        window=WIND_DIRECTION_SMOOTHING_WINDOW,
+                        center=True,
+                        min_periods=1
+                    )
+                    .mean()
+                )
+
+                # Zurück in Windrichtung (Grad)
+                _wd_smooth_rad_tmp = np.arctan2(-_u_smooth_tmp, -_v_smooth_tmp)
+                _wd_smooth_deg_tmp = np.rad2deg(_wd_smooth_rad_tmp) % 360
+
+                # Zurückschreiben in DataFrame
+                df[WIND_DIRECTION_COLUMN] = _wd_smooth_deg_tmp
+
 
         # --------------------------------------------------
         # Optional precipitation column creation
