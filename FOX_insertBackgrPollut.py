@@ -15,7 +15,7 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 # --- File Names ---
 INPUT_CSV_FILE = 'ber_mc010_20240714-20240716.csv'
 INPUT_FOX_FILE = 'merge7_clean_2024_Jun_Nov_smthWind.FOX'
-OUTPUT_FOX_FILE = INPUT_FOX_FILE.replace('.FOX', '_hourlyBG.FOX')
+OUTPUT_FOX_FILE = INPUT_FOX_FILE.replace('.FOX', '_BGpol.FOX')
 
 # --- Time Zone Settings ---
 # BLUME usually uses German wall clock time (switches MEZ/MESZ automatically)
