@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytz
 import warnings
 
-# Suppress the specific FutureWarning regarding 'T' vs 'min' if pandas is very new
+# Suppress warnings about 'T' vs 'min' in newer pandas versions
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # ==========================================
@@ -24,9 +24,12 @@ CSV_TIMEZONE = 'Europe/Berlin'
 FOX_OFFSET_HOURS = 1  # 1 = UTC+1 (MEZ). Set to 0 if FOX is in pure UTC.
 
 # --- Data Matching Settings ---
-# ENVI-met often defaults to 2018. If True, this treats the CSV data 
-# AS IF it happened in the year found inside the FOX file.
+# If True, treats CSV data AS IF it happened in the year found inside the FOX file.
 IGNORE_YEAR_MISMATCH = True 
+
+# If True, replaces all remaining '-999' values in the FOX file with '0.0'.
+# This applies to pollutants not in your CSV and timesteps outside your CSV range.
+SET_MISSING_TO_ZERO = True
 
 # --- Column Mapping ---
 # Map the ENVI-met internal names (Keys) to the BLUME CSV headers (Values).
@@ -101,12 +104,11 @@ def load_and_process_csv(filepath, target_year=None):
                     try:
                         return dt.replace(year=target_year)
                     except ValueError:
-                        # This happens if date is Feb 29 and target_year is not a leap year
                         return None 
 
                 new_index = df.index.map(replace_year_safe)
                 
-                # Drop invalid dates (e.g. Feb 29 on non-leap target year)
+                # Drop invalid dates
                 valid_mask = new_index.notnull()
                 df = df[valid_mask]
                 df.index = new_index[valid_mask]
@@ -125,7 +127,6 @@ def load_and_process_csv(filepath, target_year=None):
         df = df[cols_to_keep].rename(columns=rename_dict)
         
         # 7. Resample (Linear Interpolation) to 10 minutes
-        # Changed '10T' to '10min' to fix warning
         print("   -> Resampling to 10-minute intervals (Linear)...")
         df_resampled = df.resample('10min').interpolate(method='linear')
         
@@ -168,8 +169,17 @@ def update_fox_file(fox_path, output_path, pollutant_df):
         print("          Some timesteps will not be updated.")
     
     updated_count = 0
+    cleaned_count = 0
     
     for step in timesteps:
+        # --- NEW: Set -999 to 0 ---
+        if SET_MISSING_TO_ZERO and 'backgrPollutants' in step:
+            for key, val in step['backgrPollutants'].items():
+                if val == -999:
+                    step['backgrPollutants'][key] = 0.0
+                    cleaned_count += 1
+        
+        # --- EXISTING: Update from CSV ---
         # Parse FOX time
         ts_str = f"{step['date']} {step['time']}"
         ts_dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
@@ -198,10 +208,13 @@ def update_fox_file(fox_path, output_path, pollutant_df):
             continue
 
     print(f"\nSaving to: {output_path}")
+    if SET_MISSING_TO_ZERO:
+        print(f"(Cleaned -999 values in {cleaned_count} total pollutant entries across all timesteps)")
+    
     with open(output_path, 'w') as f:
         json.dump(fox_data, f, indent=4)
         
-    print(f"Success! Updated {updated_count} timesteps.")
+    print(f"Success! Updated {updated_count} timesteps with CSV data.")
 
 # ==========================================
 # EXECUTION
