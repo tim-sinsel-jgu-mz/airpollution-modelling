@@ -13,9 +13,9 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 # ==========================================
 
 # --- File Names ---
-INPUT_CSV_FILE = 'ber_mc010_20240714-20240716.csv'
+INPUT_CSV_FILE = 'ber_mc010_20240602-20241201.csv'
 INPUT_FOX_FILE = 'merge7_clean_2024_Jun_Nov_smthWind.FOX'
-OUTPUT_FOX_FILE = INPUT_FOX_FILE.replace('.FOX', '_BGpol.FOX')
+OUTPUT_FOX_FILE = INPUT_FOX_FILE.replace('.FOX', '_realBG2.FOX')
 
 # --- Time Zone Settings ---
 # BLUME usually uses German wall clock time (switches MEZ/MESZ automatically)
@@ -28,8 +28,13 @@ FOX_OFFSET_HOURS = 1  # 1 = UTC+1 (MEZ). Set to 0 if FOX is in pure UTC.
 IGNORE_YEAR_MISMATCH = True 
 
 # If True, replaces all remaining '-999' values in the FOX file with '0.0'.
+# If True, replaces all remaining '-999' values in the FOX file with '0.0'.
 # This applies to pollutants not in your CSV and timesteps outside your CSV range.
 SET_MISSING_TO_ZERO = True
+
+# If True, fills gaps in the original CSV recording (e.g., a missing hour)
+# using linear interpolation before resampling to 10 minutes.
+INTERPOLATE_CSV_GAPS = True
 
 # --- Column Mapping ---
 # Map the ENVI-met internal names (Keys) to the BLUME CSV headers (Values).
@@ -91,7 +96,12 @@ def load_and_process_csv(filepath, target_year=None):
         # 4. Timezone Handling (Normalize to UTC)
         local_tz = pytz.timezone(CSV_TIMEZONE)
         df = df.set_index(date_col)
-        df.index = df.index.tz_localize(local_tz, ambiguous='infer').tz_convert(pytz.UTC)
+        
+        # CHANGED: Use 'NaT' to drop the specific hour where clocks change if it causes confusion
+        df.index = df.index.tz_localize(local_tz, ambiguous='NaT', nonexistent='NaT').tz_convert(pytz.UTC)
+        
+        # Remove any rows that failed the conversion (avoids the crash)
+        df = df[df.index.notnull()]
         
         # 5. Handle Year Mismatch (Project CSV to FOX Year)
         if IGNORE_YEAR_MISMATCH and target_year:
@@ -126,7 +136,14 @@ def load_and_process_csv(filepath, target_year=None):
 
         df = df[cols_to_keep].rename(columns=rename_dict)
         
-        # 7. Resample (Linear Interpolation) to 10 minutes
+        # 7. Handle Gaps and Resample
+        if INTERPOLATE_CSV_GAPS:
+            print("   -> Filling gaps in original recording (Linear Interpolation)...")
+            # We sort and ensure the index is frequent to catch missing rows
+            df = df.sort_index()
+            # This fills missing hours in the sequence, then interpolates them
+            df = df.resample('1h').interpolate(method='linear')
+        
         print("   -> Resampling to 10-minute intervals (Linear)...")
         df_resampled = df.resample('10min').interpolate(method='linear')
         
