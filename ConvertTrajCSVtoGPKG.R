@@ -1,11 +1,14 @@
 library(data.table)
 library(sf)
-library(geojsonsf)
 
 # --- Einstellungen ---
-input_file  <- "D:/ber_linestrings_subarea_friedrichstr_gs_1.csv"
-output_file <- "D:/ber_linestrings_cleaned.gpkg"
+# Pfad zur neuen Datei anpassen (z.B. NewExampleFile1.txt oder NewExampleFile2.txt)
+input_file  <- "D:/enviprojects/Berlin_Feinstaub/traj/k7_mehringdamm.csv" 
+output_file <- "D:/enviprojects/Berlin_Feinstaub/traj/k7_mehringdamm.gpkg"
+
 chunk_size  <- 20000 
+# Basis-Zeit (falls nötig)
+base_time <- as.POSIXct("2024-01-01 00:00:00", tz="UTC")
 
 # Alte Datei löschen, falls vorhanden
 if (file.exists(output_file)) file.remove(output_file)
@@ -13,96 +16,88 @@ if (file.exists(output_file)) file.remove(output_file)
 offset <- 0
 chunk_id <- 1
 
-cat("Starte robuste Verarbeitung...\n")
+# --- Hilfsfunktion: Hex-String zu sfc ---
+hex_to_sfc <- function(hex_strings) {
+  raw_list <- lapply(hex_strings, function(x) {
+    if (is.na(x) || x == "") return(NULL)
+    as.raw(as.hexmode(substring(x, seq(1, nchar(x)-1, 2), seq(2, nchar(x), 2))))
+  })
+  st_as_sfc(raw_list, EWKB = TRUE)
+}
+
+cat("Starte Verarbeitung (mit Spaltenbereinigung)...\n")
 
 repeat {
-  # 1. Chunk lesen (mit Fehler-Handling für Dateiende)
+  # --- 1. Chunk lesen ---
   dt_chunk <- tryCatch({
     if (chunk_id == 1) {
-      fread(input_file, nrows = chunk_size, select = c("group_id", "trip_object"), fill = TRUE)
+      # Header analysieren
+      header <- names(fread(input_file, nrows = 0))
+      
+      id_col <- if("trip_id" %in% header) "trip_id" else if("vehicle_id" %in% header) "vehicle_id" else header[1]
+      geom_col <- if("geom" %in% header) "geom" else "geometry"
+      time_col <- "start_timestamp"
+      
+      cols_to_keep <- c(id_col, geom_col)
+      if (time_col %in% header) cols_to_keep <- c(cols_to_keep, time_col)
+      
+      # Globale Variablen für Folgeschleifen setzen
+      assign("cols_to_keep", cols_to_keep, envir = .GlobalEnv)
+      assign("id_col_name", id_col, envir = .GlobalEnv)
+      assign("geom_col_name", geom_col, envir = .GlobalEnv) # Speichern, wie die Spalte heißt
+      
+      fread(input_file, nrows = chunk_size, select = cols_to_keep, fill = TRUE)
     } else {
-      fread(input_file, nrows = chunk_size, skip = offset + 1, header = FALSE, fill = TRUE, 
-            select = c(1, 2), col.names = c("group_id", "trip_object"))
+      # Folge-Chunks lesen
+      temp_chunk <- fread(input_file, nrows = chunk_size, skip = offset + 1, header = FALSE, fill = TRUE)
+      full_header <- names(fread(input_file, nrows = 0))
+      setnames(temp_chunk, full_header)
+      temp_chunk[, ..cols_to_keep]
     }
-  }, error = function(e) { return(NULL) })
+  }, error = function(e) { NULL })
   
   if (is.null(dt_chunk) || nrow(dt_chunk) == 0) {
     cat("Ende der Datei erreicht.\n")
     break
   }
   
-  cat(sprintf("Verarbeite Chunk %d (%d Zeilen)...\n", chunk_id, nrow(dt_chunk)))
-  
-  # 2. Bereinigen
-  dt_chunk <- dt_chunk[!is.na(trip_object) & trip_object != ""]
+  # Leere Geometrien entfernen
+  dt_chunk <- dt_chunk[!is.na(get(geom_col_name)) & get(geom_col_name) != ""]
   
   if (nrow(dt_chunk) > 0) {
-    # Fix für doppelte Anführungszeichen (falls nötig)
-    if (grepl('""', substr(dt_chunk$trip_object[1], 1, 100), fixed = TRUE)) {
-      dt_chunk[, trip_object := gsub('""', '"', trip_object, fixed = TRUE)]
-      dt_chunk[, trip_object := gsub('^"|"$', '', trip_object)]
+    
+    # --- 2. Geometrie umwandeln ---
+    geo_col_data <- dt_chunk[[geom_col_name]]
+    geometry_sfc <- hex_to_sfc(geo_col_data)
+    
+    # --- WICHTIGE ÄNDERUNG: Alte Text-Spalte löschen ---
+    # Wir entfernen die Spalte 'geom' aus den Daten, damit sie nicht mit der neuen 
+    # Geometrie-Spalte des GeoPackages kollidiert.
+    dt_chunk[, (geom_col_name) := NULL]
+    
+    # --- 3. SF Objekt erstellen ---
+    sf_chunk <- st_sf(dt_chunk, geometry = geometry_sfc)
+    
+    # 4. Zeitstempel & CRS (wie gehabt)
+    if ("start_timestamp" %in% names(sf_chunk)) {
+      sf_chunk$start_timestamp <- as.numeric(sf_chunk$start_timestamp)
+      sf_chunk$time_start <- format(base_time + sf_chunk$start_timestamp, "%H:%M:%S")
     }
     
-    # 3. JSON Parsen
-    sf_chunk <- tryCatch({
-      geojson_sf(dt_chunk$trip_object)
-    }, error = function(e) {
-      cat("  Standard-Parsing fehlgeschlagen. Versuche Zeile-für-Zeile Fallback...\n")
-      valid_rows <- list()
-      for (i in 1:nrow(dt_chunk)) {
-        try({
-          item <- geojson_sf(dt_chunk$trip_object[i])
-          item$group_id <- dt_chunk$group_id[i]
-          valid_rows[[length(valid_rows)+1]] <- item
-        }, silent = TRUE)
-      }
-      return(do.call(rbind, valid_rows))
-    })
+    sf_chunk$track_id <- sf_chunk[[id_col_name]]
     
-    # 4. Zeitstempel extrahieren (NEUE METHODE OHNE st_startpoint)
-    if (!is.null(sf_chunk) && nrow(sf_chunk) > 0) {
-      
-      # IDs retten
-      if (!"group_id" %in% names(sf_chunk) && nrow(sf_chunk) == nrow(dt_chunk)) {
-        sf_chunk$group_id <- dt_chunk$group_id
-      }
-      
-      # Wir holen alle Koordinaten als Matrix (X, Y, Z, M, L1)
-      # L1 ist die ID der Linie, M ist der Zeitstempel
-      coords <- as.data.table(st_coordinates(sf_chunk))
-      
-      # Wir nehmen an, dass die 4. Spalte 'M' ist. 
-      # Falls die Spaltennamen fehlen, ist M oft Spalte 4 (Z ist 3).
-      # st_coordinates gibt normalerweise Spaltennamen aus (X, Y, Z, M).
-      
-      if ("M" %in% names(coords)) {
-        # Gruppieren nach 'L1' (Linien-ID) und ersten/letzten Wert holen
-        times <- coords[, .(
-          start_sec = head(M, 1), 
-          end_sec = tail(M, 1)
-        ), by = L1]
-        
-        sf_chunk$seconds_start <- times$start_sec
-        sf_chunk$seconds_end   <- times$end_sec
-        
-        # In lesbare Zeit umwandeln
-        base_time <- as.POSIXct("2024-01-01 00:00:00", tz="UTC")
-        sf_chunk$time_start <- format(base_time + sf_chunk$seconds_start, "%H:%M:%S")
-        sf_chunk$time_end   <- format(base_time + sf_chunk$seconds_end, "%H:%M:%S")
-      } else {
-        cat("  Warnung: Keine M-Werte (Zeitstempel) in den Koordinaten gefunden.\n")
-      }
-      
-      # 5. Speichern (Anhängen)
-      st_write(sf_chunk, output_file, driver = "GPKG", append = TRUE, quiet = TRUE)
+    if (is.na(st_crs(sf_chunk))) {
+      st_crs(sf_chunk) <- 4326 
     }
+    
+    # 5. Schreiben
+    st_write(sf_chunk, output_file, append = (chunk_id > 1), quiet = TRUE)
+    
+    cat(sprintf("Chunk %d verarbeitet (%d Zeilen)...\n", chunk_id, nrow(sf_chunk)))
   }
   
-  offset <- offset + nrow(dt_chunk)
+  offset <- offset + chunk_size
   chunk_id <- chunk_id + 1
-  
-  rm(dt_chunk, sf_chunk)
-  gc()
 }
 
-cat("Fertig!")
+cat("Fertig!\n")

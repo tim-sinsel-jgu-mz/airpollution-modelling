@@ -31,7 +31,7 @@ import processing
 # ============================================================
 
 # Input and output filenames (must be in the same folder as this script)
-INPUT_FILENAME = "osm_roads.shp"
+INPUT_FILENAME = "OSM_streets_Berlin_cut.shp"
 OUTPUT_FILENAME = "osm_roads_intersections.shp"
 
 # Buffer radius in meters
