@@ -21,8 +21,8 @@ similarity_tolerance = 3 # Max variance in raw trajectory counts to allow mergin
 scaling_factor = 5 # Multiply final counts by this to simulate 100% traffic
 
 # Output Paths
-output_csv_path = 'D:/enviprojects/Berlin_Mehringdamm_Base/TrajectoryOutputData/output_counts_new.csv' 
-output_gpkg_path = 'D:/enviprojects/Berlin_Mehringdamm_Base/TrajectoryOutputData/output_counts_new.gpkg' 
+output_csv_path = 'D:/enviprojects/Berlin_Mehringdamm_Base/TrajectoryOutputData/output_counts.csv' 
+output_gpkg_path = 'D:/enviprojects/Berlin_Mehringdamm_Base/TrajectoryOutputData/output_counts.gpkg' 
 
 # Get layers
 osm_layer = QgsProject.instance().mapLayersByName(raw_osm_layer_name)[0]
@@ -54,7 +54,7 @@ print("Step 3: Setting up memory layer for counting...")
 memory_layer = QgsVectorLayer(f"LineString?crs={crs_str}", "Temp_Counts", "memory")
 provider = memory_layer.dataProvider()
 
-# Only add ID and hour fields for simplicity during calculation
+# Only add tempID and hour fields for simplicity during calculation
 provider.addAttributes([QgsField("tempID", QVariant.Int)])
 for h in range(24):
     provider.addAttributes([QgsField(f"h_{h:02d}", QVariant.Int)])
@@ -183,8 +183,8 @@ print(f"Step 7: Applying {scaling_factor}x scaling and generating final layer...
 final_layer = QgsVectorLayer(f"MultiLineString?crs={crs_str}", "Final_Merged_Counts", "memory")
 final_prov = final_layer.dataProvider()
 
-# Set up final fields
-final_prov.addAttributes([QgsField("enviID", QVariant.Int)])
+# --- CHANGED: enviID is now a 6-character String ---
+final_prov.addAttributes([QgsField("enviID", QVariant.String, len=6)])
 for h in range(24):
     final_prov.addAttributes([QgsField(f"h_{h:02d}", QVariant.Int)])
 final_layer.updateFields()
@@ -199,7 +199,9 @@ for grp in groups:
     
     new_feat = QgsFeature(final_layer.fields())
     new_feat.setGeometry(merged_geom)
-    new_feat.setAttribute("enviID", envi_id_counter)
+    
+    # --- CHANGED: Apply zero-padding to create a 6-digit string like "000001" ---
+    new_feat.setAttribute("enviID", f"{envi_id_counter:06d}")
     
     for h in range(24):
         # Calculate the average raw count for this group, then scale it
@@ -241,6 +243,9 @@ else:
 # Save CSV
 save_options_csv = QgsVectorFileWriter.SaveVectorOptions()
 save_options_csv.driverName = "CSV"
+# --- CHANGED: Inject OGR parameter to force semicolon separator ---
+save_options_csv.layerOptions = ["SEPARATOR=SEMICOLON"]
+
 res_csv = QgsVectorFileWriter.writeAsVectorFormatV3(
     final_layer,
     output_csv_path,
