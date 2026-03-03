@@ -1,15 +1,14 @@
 import os
 import glob
+import json
 import pandas as pd
 import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
-from sklearn.metrics import mean_squared_error, r2_score
-import datetime
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
 # --- PLOTTING STYLE CONFIGURATION ---
-# rigorous publication quality settings
 plt.rcParams['font.family'] = 'arial'
 plt.rcParams['font.size'] = 12
 plt.rcParams['axes.linewidth'] = 1.5
@@ -22,370 +21,343 @@ plt.rcParams['ytick.direction'] = 'in'
 plt.rcParams['xtick.top'] = True
 plt.rcParams['ytick.right'] = True
 plt.rcParams['lines.linewidth'] = 2.5
-plt.rcParams['legend.frameon'] = False     # Clean legend without box
+#plt.rcParams['legend.frameon'] = False     # Clean legend without box
 plt.rcParams['savefig.bbox'] = 'tight'     # Ensure nothing is cut off
 plt.rcParams['savefig.dpi'] = 300          # High resolution
 
-def load_measurements(csv_path):
-    """
-    Loads and parses the measurement CSV file.
-    Expects format: Datetime;PM10;PM2,5;NO2;NO;NOX
-    """
+
+def load_measurements(csv_path, target_start, target_end):
+    """Loads measurements and handles MEZ/MESZ switch by converting to UTC+1."""
     print(f"--- Loading Measurements: {os.path.basename(csv_path)} ---")
     try:
-        # Load CSV (handle semicolon delimiter and comma decimal if present)
         df = pd.read_csv(csv_path, sep=';', decimal=',')
-        
-        # Parse Datetime (Format: 01.06.2024 00:00)
         df['Datetime'] = pd.to_datetime(df['Datetime'], format='%d.%m.%Y %H:%M', errors='coerce')
         df.dropna(subset=['Datetime'], inplace=True)
         df.set_index('Datetime', inplace=True)
         
-        # Rename columns to standard internal names
-        rename_map = {
-            'PM10': 'PM10',
-            'PM2,5': 'PM2.5',
-            'NO2': 'NO2',
-            'NO': 'NO',
-            'NOX': 'NOx'
-        }
-        df.rename(columns=rename_map, inplace=True)
+        # Handle Timezones: Berlin (MEZ/MESZ) -> UTC+1 (Fixed)
+        # We localize to Berlin then convert to a fixed +01:00 offset
+        # Replace the tz_localize block in load_measurements with this:
+        try:
+            # 'ambiguous=True' assumes the first instance (Daylight Savings) during the fold
+            df = df.tz_localize('Europe/Berlin', ambiguous=True).tz_convert('Etc/GMT-1')
+            df.index = df.index.tz_localize(None) 
+        except Exception as e:
+            print(f"Timezone conversion error: {e}")
+            # Fallback: if localization fails, treat as naive and force limit
+            df.index = df.index.tz_localize(None)
+
+        df.rename(columns={'PM10': 'PM10', 'PM2,5': 'PM2.5'}, inplace=True)
+        df = df[['PM10', 'PM2.5']].apply(pd.to_numeric, errors='coerce')
         
-        # Ensure numeric types
-        for col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-        print(f"Loaded {len(df)} timestamps. Range: {df.index.min()} to {df.index.max()}")
+        # Limit to Sim Range
+        df = df.loc[target_start:target_end]
         return df
     except Exception as e:
-        print(f"Error loading CSV: {e}")
+        print(f"Error loading Measurements: {e}")
         return pd.DataFrame()
 
-def load_envimet_netcdf_series(nc_folder_path, x_idx, y_idx, z_idx, cache_dir):
-    """
-    Loads specific grid point data. 
-    Checks for Cached CSV first. If not found, loads from NetCDF and saves to Cache.
-    """
-    print(f"--- Loading Model Data ---")
-    
-    # 1. Identify the Simulation Name (based on the first .nc file name)
-    nc_files = sorted(glob.glob(os.path.join(nc_folder_path, "*.nc")))
-    if not nc_files:
-        print("Error: No .nc files found in directory.")
-        return pd.DataFrame(), "Unknown"
+def load_fox_background(fox_path, target_start, target_end):
+    """Parses .FOX (JSON) forcing file for background concentrations."""
+    print(f"--- Loading FOX Background Data ---")
+    try:
+        with open(fox_path, 'r') as f:
+            data = json.load(f)
         
-    # Base name for the simulation series
-    sim_name = os.path.splitext(os.path.basename(nc_files[0]))[0]
+        records = []
+        for ts in data['timestepList']:
+            # Fix 2018 year to 2024 (or match sim year)
+            dt = pd.to_datetime(ts['date'] + ' ' + ts['time'])
+            dt = dt.replace(year=target_start.year) 
+            
+            pol = ts['backgrPollutants']
+            records.append({
+                'Datetime': dt,
+                'PM10_BG': pol.get('PM10', 0),
+                'PM2.5_BG': pol.get('PM25', 0)
+            })
+            
+        df_fox = pd.DataFrame(records).set_index('Datetime').sort_index()
+        # Resample to hourly mean
+        df_fox = df_fox.resample('1h').mean().loc[target_start:target_end]
+        return df_fox
+    except Exception as e:
+        print(f"Error loading FOX: {e}")
+        return pd.DataFrame()
+
+def load_traffic_volume(traffic_path, sim_dates):
+    """Loads 24h traffic profile and maps it to all days in the simulation."""
+    print(f"--- Loading Traffic Data ---")
+    try:
+        df_t = pd.read_csv(traffic_path, sep=';')
+        df_t['Hour'] = pd.to_datetime(df_t['Time'], format='%H:%M:%S').dt.hour
+        df_t.set_index('Hour', inplace=True)
+        
+        # Expand traffic profile to cover every hour in the sim range
+        full_range = pd.date_range(sim_dates.min(), sim_dates.max(), freq='1h')
+        traffic_series = pd.DataFrame(index=full_range)
+        traffic_series['Traffic'] = traffic_series.index.hour.map(df_t['TrajCount'])
+        return traffic_series
+    except Exception as e:
+        print(f"Error loading Traffic: {e}")
+        return pd.DataFrame()
+
+def load_envimet_series(nc_folder_path, x_idx, y_idx, z_idx, cache_dir):
+    """Loads NetCDF or Cache, rounding 'crooked' timestamps."""
+    nc_files = sorted(glob.glob(os.path.join(nc_folder_path, "*.nc")))
+    if not nc_files: return pd.DataFrame(), "Unknown"
     
-    # Construct Cache Filename
+    sim_name = os.path.splitext(os.path.basename(nc_files[0]))[0]
     cache_file = os.path.join(cache_dir, f"Extracted_{sim_name}_X{x_idx}_Y{y_idx}_Z{z_idx}.csv")
     
-    # 2. CHECK CACHE
     if os.path.exists(cache_file):
-        print(f"Cache found! Loading from: {cache_file}")
-        df_model = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-        return df_model, sim_name
+        df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+    else:
+        # Extraction logic (simplified for brevity, identical to your original logic)
+        data_frames = []
+        for f in nc_files:
+            with xr.open_dataset(f) as ds:
+                pt = ds.isel(GridsI=x_idx, GridsJ=y_idx, GridsK=z_idx)
+                chunk = pd.DataFrame({
+                    'PM2.5': pt['PM25Conc'].values,
+                    'PM10': pt['PM25Conc'].values + pt['PMCoarseConc'].values
+                }, index=pd.to_datetime(pt['Time'].values))
+                data_frames.append(chunk)
+        df = pd.concat(data_frames).sort_index()
+        df.to_csv(cache_file)
+
+    # CRITICAL: Round crooked timestamps to nearest minute
+    df.index = df.index.round('1min')
+    return df, sim_name
+
+def calculate_statistics(x, y):
+    """
+    Calculates evaluation statistics between measured (x) and modelled (y).
+    Returns dictionary of metrics.
+    """
+    mask = x.notna() & y.notna()
+    x = x[mask]
+    y = y[mask]
+
+    if len(x) < 2:
+        return None
+
+    # Pearson correlation
+    r = np.corrcoef(x, y)[0, 1]
+
+    # Regression R² (predictive skill)
+    r2_reg = r2_score(x, y)
     
-    # 3. EXTRACT FROM NETCDF (if no cache)
-    print(f"No cache found. Extracting from NetCDF files... (This may take a moment)")
-    print(f"Target Grid: X={x_idx}, Y={y_idx}, Z={z_idx}")
+    #Means
+    mean_obs = np.mean(x)
+    mean_mod = np.mean(y)
     
-    data_frames = []
-    
-    # Map NetCDF var name -> Internal DataFrame name
-    var_map = {
-        'PM25Conc': 'PM2.5',
-        'PMCoarseConc': 'PM_Coarse',
-        'NO2Conc': 'NO2',
-        'NOConc': 'NO',
-        'NOxConc': 'NOx'
+    # Errors
+    mae = mean_absolute_error(x, y)
+    rmse = np.sqrt(mean_squared_error(x, y))
+
+    # Mean Bias
+    mean_bias = np.mean(y - x)
+
+    # Fractional Bias
+    fb = 2 * np.mean((y - x) / (y + x))
+
+    return {
+        "r": r,
+        "r2_reg": r2_reg,
+        "mean_obs": mean_obs,
+        "mean_mod": mean_mod,
+        "mae": mae,
+        "rmse": rmse,
+        "mean_bias": mean_bias,
+        "fb": fb
     }
-    
-    for f in nc_files:
-        try:
-            with xr.open_dataset(f, decode_times=True) as ds:
-                # Check dims
-                if 'GridsI' not in ds.dims or 'GridsJ' not in ds.dims:
-                    continue
-                
-                # Select point
-                point_ds = ds.isel(GridsI=x_idx, GridsJ=y_idx, GridsK=z_idx)
-                
-                # Extract data
-                data = {}
-                data['Datetime'] = point_ds['Time'].values
-                
-                for nc_var, df_var in var_map.items():
-                    if nc_var in point_ds:
-                        data[df_var] = point_ds[nc_var].values
-                
-                df_chunk = pd.DataFrame(data)
-                df_chunk.set_index('Datetime', inplace=True)
-                data_frames.append(df_chunk)
-                
-        except Exception as e:
-            print(f"Error reading {f}: {e}")
-            
-    if not data_frames:
-        return pd.DataFrame(), sim_name
-        
-    # Concatenate and Sort
-    df_model = pd.concat(data_frames).sort_index()
-    
-    # Calculate PM10
-    if 'PM2.5' in df_model.columns and 'PM_Coarse' in df_model.columns:
-        df_model['PM10'] = df_model['PM2.5'] + df_model['PM_Coarse']
-        
-    # 4. SAVE TO CACHE
-    print(f"Saving extracted data to: {cache_file}")
-    df_model.to_csv(cache_file)
-    
-    return df_model, sim_name
 
-def align_to_hourly_snapshots(df_meas, df_model):
+def get_incremented_filename(out_dir, base_name):
     """
-    Aligns Model data to Measurement timestamps (Hourly).
-    Disregards intermediate model steps (e.g. 10:10, 10:20), taking only the snapshot
-    closest to the measurement time (e.g. 10:00).
+    Returns a filename with _001, _002, ... appended
+    if the file already exists in out_dir.
     """
-    if df_meas.empty or df_model.empty:
-        return None, None
-        
-    print("--- Aligning Data (Hourly Snapshots) ---")
-    
-    # 1. Sort Indices
-    df_meas = df_meas.sort_index()
-    df_model = df_model.sort_index()
-    
-    # 2. Restrict Measurement data to the Model's general time range first
-    # (Improves performance before reindexing)
-    t_min = df_model.index.min() - pd.Timedelta(minutes=15)
-    t_max = df_model.index.max() + pd.Timedelta(minutes=15)
-    
-    mask_time = (df_meas.index >= t_min) & (df_meas.index <= t_max)
-    df_meas_cut = df_meas.loc[mask_time].copy()
-    
-    if df_meas_cut.empty:
-        print("Error: No measurements found in model time range.")
-        return None, None
+    name, ext = os.path.splitext(base_name)
+    counter = 1
 
-    # 3. ALIGNMENT
-    # Reindex the MODEL to match the MEASUREMENT timestamps.
-    # method='nearest': Picks the closest model timestamp (e.g. Model 10:00 for Meas 10:00)
-    # tolerance='5min': Ensures we don't match if gaps are too huge.
-    try:
-        df_model_aligned = df_model.reindex(
-            df_meas_cut.index, 
-            method='nearest', 
-            tolerance=pd.Timedelta('5min')
-        )
-    except Exception as e:
-        print(f"Alignment Error: {e}")
-        return None, None
+    new_name = f"{name}_{counter}{ext}"
+    full_path = os.path.join(out_dir, new_name)
 
-    # 4. Remove rows where alignment found no data (NaNs)
-    # Check a key column like 'PM2.5'
-    valid_mask = df_model_aligned['PM2.5'].notna()
-    
-    df_meas_final = df_meas_cut.loc[valid_mask]
-    df_model_final = df_model_aligned.loc[valid_mask]
-    
-    print(f"Alignment matched {len(df_meas_final)} hourly points.")
-    
-    return df_meas_final, df_model_final
+    while os.path.exists(full_path):
+        counter += 1
+        new_name = f"{name}_{counter}{ext}"
+        full_path = os.path.join(out_dir, new_name)
 
-def plot_diurnal_2x2(df_meas, df_model, pollutants, out_dir, sim_name):
-    """
-    Generates a 2x2 Grid of Diurnal Cycle Plots with Embedded Stats.
-    Saves directly to out_dir.
-    """
-    # Setup 2x2 Figure
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    axes = axes.flatten()
-    
-    # Get Date for Title
+    return full_path
+
+def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_dir, sim_name):
+    """Generates 2x1 Diurnal and 2x1 Regression plots with stats boxes and fixed gaps."""
     date_str = df_model.index[0].strftime('%d.%m.%Y')
-    fig.suptitle(f"Diurnal Cycles - {date_str} - {sim_name}", fontsize=16, y=0.95)
     
+    # 1. DIURNAL PLOT (2 rows, 1 column)
+    fig, axes = plt.subplots(2, 1, figsize=(8, 10))
     for i, pol in enumerate(pollutants):
         ax = axes[i]
         
-        if pol not in df_meas.columns or pol not in df_model.columns:
-            ax.text(0.5, 0.5, f"{pol} missing", ha='center', va='center')
-            continue
-        
-        # --- CALCULATE STATS (on the full hourly time series) ---
-        # We calculate stats on the aligned data points, not the diurnal average curves
-        x = df_meas[pol]
-        y = df_model[pol]
-        mask = ~np.isnan(x) & ~np.isnan(y)
-        
-        if np.sum(mask) > 1:
-            x_valid, y_valid = x[mask], y[mask]
-            rmse = np.sqrt(mean_squared_error(x_valid, y_valid))
-            # Pearson R2
-            r_sq = np.corrcoef(x_valid, y_valid)[0, 1]**2
-            stats_str = f"$R^2={r_sq:.2f}$\n$RMSE={rmse:.1f}$"
+        # Calculate Stats for the box (on the full hourly time series)
+        stats = calculate_statistics(df_meas[pol], df_model[pol])
+
+        if stats is not None:
+            stats_str = (
+                f"$r = {stats['r']:.2f}$\n"
+                f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
+                f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
+                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n"
+                f"MAE = {stats['mae']:.2f}\n"
+                f"RMSE = {stats['rmse']:.2f}\n"
+                f"MB = {stats['mean_bias']:.2f}\n"
+                f"FB = {stats['fb']:.2f}"
+            )
         else:
             stats_str = "No Data"
 
-        # --- PREPARE DIURNAL DATA ---
-        meas_diurnal = df_meas.groupby(df_meas.index.hour)[pol].mean()
-        model_diurnal = df_model.groupby(df_model.index.hour)[pol].mean()
-        
-        # --- PLOT ---
-        ax.plot(meas_diurnal.index, meas_diurnal, 
-                label='Measured', color='black', linewidth=1, linestyle='-')
-        
-        ax.plot(model_diurnal.index, model_diurnal, 
-                label='Modelled', color='#D62728', linewidth=1, linestyle='-')
-        
-        # Add Stats Box
-        ax.text(0.04, 0.94, stats_str, transform=ax.transAxes, 
-                verticalalignment='top', fontsize=11,
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cccccc", alpha=0.9))
-        
-        # Styling
-        ax.set_title(pol, fontsize=14, pad=10)
+        # Diurnal Averages - REINDEX to range(24) to prevent lines connecting across gaps
+        m_diurnal = df_meas.groupby(df_meas.index.hour)[pol].mean().reindex(range(24))
+        s_diurnal = df_model.groupby(df_model.index.hour)[pol].mean().reindex(range(24))
+        f_diurnal = df_fox.groupby(df_fox.index.hour)[f"{pol}_BG"].mean().reindex(range(24))
+        t_diurnal = df_traffic.groupby(df_traffic.index.hour)['Traffic'].mean().reindex(range(24))
+
+        # Traffic Fill (Secondary Axis)
+        ax2 = ax.twinx()
+        ax2.fill_between(t_diurnal.index, 0, t_diurnal, color='gray', alpha=0.15, label='Traffic')
+        ax2.set_ylabel("Traffic Vol.", color='gray', fontsize=10)
+        ax2.tick_params(axis='y', labelcolor='gray')
+        ax2.set_ylim(0, None)
+
+        # Pollution Lines
+        ax.plot(m_diurnal.index, m_diurnal, 'k-', label='Measured', zorder=5)
+        ax.plot(s_diurnal.index, s_diurnal, '#D62728', label='Modelled', zorder=6)
+        ax.plot(f_diurnal.index, f_diurnal, color='gray', linestyle='--', label='Background (FOX)', zorder=4)
+
+        # Stats Box (Diurnal)
+        ax.text(0.03, 0.95, stats_str, transform=ax.transAxes, verticalalignment='top',
+                fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+
+        ax.set_title(f"Diurnal Cycle: {pol}", fontweight='bold')
+        ax.set_ylabel("Conc. [µg m$^{-3}$]")
         ax.set_xlabel("Hour of Day")
-        ax.set_ylabel("Conc. [µg m$^{{-3}}$]")
         ax.set_xlim(0, 23)
         ax.set_xticks(range(0, 24, 4))
         ax.xaxis.set_minor_locator(AutoMinorLocator(4))
+        ax.set_ylim(0, None) # Force Y-axis to start at 0
+        ### if i == 0: ax.legend(loc='upper right', fontsize=9, ncol=2)
         ax.grid(True, which='major', linestyle=':', alpha=0.6)
         
+        # Collect legend handles from first axis
         if i == 0:
-            ax.legend(loc='upper right', frameon=True, fontsize=10)
+            handles_main, labels_main = ax.get_legend_handles_labels()
+            handles_sec, labels_sec = ax2.get_legend_handles_labels()
 
-    # Hide unused subplots
-    for j in range(len(pollutants), len(axes)):
-        axes[j].axis('off')
+    # Combine (avoid duplicates if needed)
+    handles = handles_main + handles_sec
+    labels = labels_main + labels_sec
 
-    plt.tight_layout(rect=[0, 0, 1, 0.93])
+    # Global legend underneath both subplots
+    fig.legend(handles, labels,
+               loc='lower center',
+               ncol=len(labels),
+               frameon=False,
+               bbox_to_anchor=(0.5, -0.02))
     
-    # Save directly to output directory
-    filename = f"Diurnal_Matrix_{sim_name}.png"
-    plt.savefig(os.path.join(out_dir, filename))
-    filename = f"Diurnal_Matrix_{sim_name}.svg"
-    plt.savefig(os.path.join(out_dir, filename))
-    plt.close()
-
-def plot_regression_2x2(df_meas, df_model, pollutants, out_dir, sim_name):
-    """
-    Generates a 2x2 Grid of Regression Plots.
-    Saves directly to out_dir.
-    """
-    fig, axes = plt.subplots(2, 2, figsize=(12, 12))
-    axes = axes.flatten()
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
     
-    date_str = df_model.index[0].strftime('%d.%m.%Y')
-    fig.suptitle(f"Model Evaluation - {date_str} - {sim_name}", fontsize=16, y=0.95)
+    base_filename = f"Diurnal_Final_{sim_name}.png"
+    save_path = get_incremented_filename(out_dir, base_filename)
+    plt.savefig(save_path)
+    base_filename = f"Diurnal_Final_{sim_name}.svg"
+    save_path = get_incremented_filename(out_dir, base_filename)
+    plt.savefig(save_path)
     
+    # 2. REGRESSION PLOT (2 rows, 1 column)
+    fig, axes = plt.subplots(2, 1, figsize=(6, 10))
     for i, pol in enumerate(pollutants):
         ax = axes[i]
+        x_raw, y_raw = df_meas[pol], df_model[pol]
+        mask = x_raw.notna() & y_raw.notna()
+        x, y = x_raw[mask], y_raw[mask]
         
-        if pol not in df_meas.columns or pol not in df_model.columns:
-            ax.text(0.5, 0.5, f"{pol} missing", ha='center')
-            continue
-            
-        x_full = df_meas[pol]
-        y_full = df_model[pol]
-        mask = ~np.isnan(x_full) & ~np.isnan(y_full)
-        x = x_full[mask]
-        y = y_full[mask]
-        
-        if len(x) < 2:
-            ax.text(0.5, 0.5, "Not enough data", ha='center')
-            continue
-
-        # Stats
-        rmse = np.sqrt(mean_squared_error(x, y))
-        r_sq = np.corrcoef(x, y)[0, 1]**2
-        
-        # Limits
-        limit = max(x.max(), y.max()) * 1.1
-        ax.set_xlim(0, limit)
-        ax.set_ylim(0, limit)
-        ax.set_aspect('equal')
-        
-        # 1:1 Line
-        ax.plot([0, limit], [0, limit], color='gray', linestyle=':', linewidth=1.5, zorder=1)
-        
-        # Scatter
-        ax.scatter(x, y, alpha=0.5, c='#1f77b4', s=15, edgecolors='none', zorder=2)
-        
-        # Regression Line
-        try:
+        if len(x) > 1:
+            stats = calculate_statistics(x, y)
             m, b = np.polyfit(x, y, 1)
-            ax.plot(x, m*x + b, color='#D62728', linewidth=1, linestyle='-', zorder=3)
             
-            stats_text = (f"$y = {m:.2f}x + {b:.2f}$\n"
-                          f"$R^2 = {r_sq:.2f}$\n"
-                          f"RMSE $= {rmse:.2f}$")
+            # Scatter, 1:1 Line, and Regression Line
+            ax.scatter(x, y, alpha=0.5, s=20, edgecolors='none')
+            lim = max(x.max(), y.max()) * 1.1
+            ax.plot([0, lim], [0, lim], 'k--', alpha=0.3, label='1:1')
+            ax.plot(x, m*x + b, color='#D62728', linewidth=1.5, label='Fit')
             
-            ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, 
-                    verticalalignment='top', fontsize=11, 
-                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.9))
-        except:
-            pass
-        
-        ax.set_title(pol, fontsize=14)
-        ax.set_xlabel("Measured [µg m$^{{-3}}$]")
-        ax.set_ylabel("Modelled [µg m$^{{-3}}$]")
-        ax.xaxis.set_minor_locator(AutoMinorLocator())
-        ax.yaxis.set_minor_locator(AutoMinorLocator())
+            # Stats Box (Regression)
+            stats_str = (
+                f"$y = {m:.2f}x + {b:.2f}$\n"
+                f"$r = {stats['r']:.2f}$\n"
+                f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
+                f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
+                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n"
+                f"MAE = {stats['mae']:.2f}\n"
+                f"RMSE = {stats['rmse']:.2f}\n"
+                f"MB = {stats['mean_bias']:.2f}\n"
+                f"FB = {stats['fb']:.2f}"
+            )
+            
+            ax.text(0.95, 0.05, stats_str, transform=ax.transAxes, verticalalignment='bottom', horizontalalignment='right',
+                    fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+            
+            ax.set_xlim(0, lim)
+            ax.set_ylim(0, lim)
+            ax.set_aspect('equal')
+            ax.xaxis.set_minor_locator(AutoMinorLocator())
+            ax.yaxis.set_minor_locator(AutoMinorLocator())
+        else:
+            ax.text(0.5, 0.5, "Insufficient Data", ha='center')
 
-    for j in range(len(pollutants), len(axes)):
-        axes[j].axis('off')
+        ax.set_title(f"{pol} Regression", fontweight='bold')
+        ax.set_xlabel("Measured [µg m$^{-3}$]")
+        ax.set_ylabel("Modelled [µg m$^{-3}$]")
 
-    plt.tight_layout(rect=[0, 0, 1, 0.93])
+    plt.tight_layout()
+    base_filename = f"Regression_Final_{sim_name}.png"
+    save_path = get_incremented_filename(out_dir, base_filename)
+    plt.savefig(save_path)
+    base_filename = f"Regression_Final_{sim_name}.svg"
+    save_path = get_incremented_filename(out_dir, base_filename)
+    plt.savefig(save_path)
     
-    # Save directly to output directory
-    filename = f"Regression_Matrix_{sim_name}.png"
-    plt.savefig(os.path.join(out_dir, filename))
-    filename = f"Regression_Matrix_{sim_name}.svg"
-    plt.savefig(os.path.join(out_dir, filename))    
-    plt.close()
-
-# --- MAIN EXECUTION ---
 if __name__ == "__main__":
-
-    # --- CONFIGURATION ---
-    # Update these paths as needed
-    csv_file = r"D:\enviprojects\Berlin_Mehringdamm_Base\Berlin_Feinstaub_Messdaten.csv"
-    netcdf_folder = r"X:\Linde\Pascal\20240715_messstation3_3m_realBG\NetCDF"
-    
-    base_out_dir = r"D:\Berlin_Mehringdamm_CompResults\Base"
-    os.makedirs(base_out_dir, exist_ok=True)
-    
+    # Paths (Update these)
+    csv_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\Berlin_Feinstaub_Messdaten.csv"
+    fox_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2.FOX"
+    traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_LEIPZ1.CSV"
+    netcdf_folder = r"Z:\Linde\Pascal\20241106_messstation_small_2m_realBG2\NetCDF"
+    base_out_dir = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting"
     cache_dir = os.path.join(base_out_dir, "Data_Cache")
     os.makedirs(cache_dir, exist_ok=True)
+
+    # 1. Load Model Data first to define time range
+    model_df, sim_name = load_envimet_series(netcdf_folder, 134, 104, 3, cache_dir)
+    t_start, t_end = model_df.index.min(), model_df.index.max()
+
+    # 2. Load other files limited to sim range
+    meas_df = load_measurements(csv_file, t_start, t_end)
+    fox_df = load_fox_background(fox_file, t_start, t_end)
+    traffic_df = load_traffic_volume(traffic_file, model_df.index)
+
+    # 3. Align all to hourly snapshots
+    # Resample model to hourly to match measurements
+    model_hourly = model_df.resample('1h').mean()
     
-    target_x, target_y, target_z = 134, 104, 3
-    
-    # 1. Load Measurements
-    meas_df = load_measurements(csv_file)
-    
-    # 2. Load Model Data
-    model_df, sim_name = load_envimet_netcdf_series(netcdf_folder, target_x, target_y, target_z, cache_dir)
-    
-    if not meas_df.empty and not model_df.empty:
-        
-        # 3. Align Data (HOURLY SNAPSHOTS ONLY)
-        # We now match Model strictly to Measurement timestamps
-        aligned_meas, aligned_model = align_to_hourly_snapshots(meas_df, model_df)
-        
-        if aligned_meas is not None and not aligned_meas.empty:
-            pollutants = ['PM2.5', 'PM10', 'NO2', 'NO']
-            
-            print(f"\nGenerating Matrix plots for: {sim_name}")
-            
-            # 4. Generate Plots
-            plot_diurnal_2x2(aligned_meas, aligned_model, pollutants, base_out_dir, sim_name)
-            plot_regression_2x2(aligned_meas, aligned_model, pollutants, base_out_dir, sim_name)
-            
-            print(f"Done. Results in: {os.path.abspath(base_out_dir)}")
-        else:
-            print("Alignment failed. No overlapping data found.")
+    # Final cleanup: Ensure all dataframes have the exact same index
+    common_idx = model_hourly.index.intersection(meas_df.index)
+
+    if common_idx.empty:
+        print("Error: No overlapping timestamps found between measurements and model!")
     else:
-        print("Data loading failed.")
+        plot_final_results(meas_df.loc[common_idx], model_hourly.loc[common_idx], 
+                           fox_df.loc[common_idx], traffic_df.loc[common_idx], 
+                           ['PM2.5', 'PM10'], base_out_dir, sim_name)
+        print("Processing Complete.")
