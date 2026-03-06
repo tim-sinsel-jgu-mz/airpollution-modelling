@@ -120,7 +120,7 @@ def load_envimet_series(nc_folder_path, x_idx, y_idx, z_idx, cache_dir):
                 pt = ds.isel(GridsI=x_idx, GridsJ=y_idx, GridsK=z_idx)
                 chunk = pd.DataFrame({
                     'PM2.5': pt['PM25Conc'].values,
-                    'PM10': pt['PM25Conc'].values + pt['PMCoarseConc'].values
+                    'PM10': pt['PMCoarseConc'].values   #ENVI-met mistakenly labels PM10 as PMcoarse. In reality PMcoarse is a term describing particles with a diameter ranging from 2.5 to 10µm (PM10-2.5)
                 }, index=pd.to_datetime(pt['Time'].values))
                 data_frames.append(chunk)
         df = pd.concat(data_frames).sort_index()
@@ -144,6 +144,7 @@ def calculate_statistics(x, y):
 
     # Pearson correlation
     r = np.corrcoef(x, y)[0, 1]
+    r2_pearson = r**2
 
     # Regression R² (predictive skill)
     r2_reg = r2_score(x, y)
@@ -164,6 +165,7 @@ def calculate_statistics(x, y):
 
     return {
         "r": r,
+        "r2_pearson": r2_pearson,
         "r2_reg": r2_reg,
         "mean_obs": mean_obs,
         "mean_mod": mean_mod,
@@ -191,12 +193,15 @@ def get_incremented_filename(out_dir, base_name):
 
     return full_path
 
-def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_dir, sim_name):
+def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_dir, sim_name, coords):
     """Generates 2x1 Diurnal and 2x1 Regression plots with stats boxes and fixed gaps."""
     date_str = df_model.index[0].strftime('%d.%m.%Y')
+    x_idx, y_idx, z_idx = coords
+    header_str = f"Simulation: {sim_name} | Grid: X={x_idx}, Y={y_idx}, Z={z_idx}"
     
     # 1. DIURNAL PLOT (2 rows, 1 column)
     fig, axes = plt.subplots(2, 1, figsize=(8, 10))
+    fig.suptitle(header_str, fontsize=14, fontweight='bold', y=0.98) # Global Title
     for i, pol in enumerate(pollutants):
         ax = axes[i]
         
@@ -206,6 +211,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
         if stats is not None:
             stats_str = (
                 f"$r = {stats['r']:.2f}$\n"
+                f"$r^2_{{corr}} = {stats['r2_pearson']:.2f}$\n"
                 f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
                 f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
                 f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n"
@@ -276,6 +282,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
     
     # 2. REGRESSION PLOT (2 rows, 1 column)
     fig, axes = plt.subplots(2, 1, figsize=(6, 10))
+    fig.suptitle(header_str, fontsize=12, fontweight='bold', y=0.98) # Global Title
     for i, pol in enumerate(pollutants):
         ax = axes[i]
         x_raw, y_raw = df_meas[pol], df_model[pol]
@@ -296,6 +303,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
             stats_str = (
                 f"$y = {m:.2f}x + {b:.2f}$\n"
                 f"$r = {stats['r']:.2f}$\n"
+                f"$r^2_{{corr}} = {stats['r2_pearson']:.2f}$\n"
                 f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
                 f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
                 f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n"
@@ -333,13 +341,16 @@ if __name__ == "__main__":
     csv_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\Berlin_Feinstaub_Messdaten.csv"
     fox_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2.FOX"
     traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_LEIPZ1.CSV"
-    netcdf_folder = r"Z:\Linde\Pascal\20241106_messstation_small_2m_realBG2\NetCDF"
+    netcdf_folder = r"Z:\Linde\Pascal\20241106_messstation3_3m_realBG2_lineSrc\NetCDF"
     base_out_dir = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting"
     cache_dir = os.path.join(base_out_dir, "Data_Cache")
     os.makedirs(cache_dir, exist_ok=True)
-
+    
+    # Define coordinates once here
+    target_coords = (134, 104, 3)
+    
     # 1. Load Model Data first to define time range
-    model_df, sim_name = load_envimet_series(netcdf_folder, 134, 104, 3, cache_dir)
+    model_df, sim_name = load_envimet_series(netcdf_folder, *target_coords, cache_dir) #area5_4m: 101, 92, 3      #messstation3_3m: 134, 104, 3
     t_start, t_end = model_df.index.min(), model_df.index.max()
 
     # 2. Load other files limited to sim range
@@ -359,5 +370,5 @@ if __name__ == "__main__":
     else:
         plot_final_results(meas_df.loc[common_idx], model_hourly.loc[common_idx], 
                            fox_df.loc[common_idx], traffic_df.loc[common_idx], 
-                           ['PM2.5', 'PM10'], base_out_dir, sim_name)
+                           ['PM2.5', 'PM10'], base_out_dir, sim_name, target_coords)
         print("Processing Complete.")
