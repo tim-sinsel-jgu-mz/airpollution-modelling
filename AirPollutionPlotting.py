@@ -120,7 +120,7 @@ def load_envimet_series(nc_folder_path, x_idx, y_idx, z_idx, cache_dir):
                 pt = ds.isel(GridsI=x_idx, GridsJ=y_idx, GridsK=z_idx)
                 chunk = pd.DataFrame({
                     'PM2.5': pt['PM25Conc'].values,
-                    'PM10': pt['PMCoarseConc'].values   #ENVI-met mistakenly labels PM10 as PMcoarse. In reality PMcoarse is a term describing particles with a diameter ranging from 2.5 to 10µm (PM10-2.5)
+                    'PM10': pt['PM10Conc'].values  #ENVIcore added correct PM10Conc variable
                 }, index=pd.to_datetime(pt['Time'].values))
                 data_frames.append(chunk)
         df = pd.concat(data_frames).sort_index()
@@ -341,7 +341,7 @@ if __name__ == "__main__":
     csv_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\Berlin_Feinstaub_Messdaten.csv"
     fox_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2.FOX"
     traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_LEIPZ1.CSV"
-    netcdf_folder = r"Z:\Linde\Pascal\20241106_messstation3_3m_realBG2_lineSrc\NetCDF"
+    netcdf_folder = r"Z:\Linde\Pascal\20241106_messstation3_3m_realBG2_lineSrc2\NetCDF"
     base_out_dir = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting"
     cache_dir = os.path.join(base_out_dir, "Data_Cache")
     os.makedirs(cache_dir, exist_ok=True)
