@@ -8,6 +8,11 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
+# version 2.6: 
+# Now only selects from hour 01:00 and onward, so that we skip hour 00:00. 
+# Hour 00:00, as the initialization stage, can deliver results that differ strongly from the rest of the diurnal profile.
+# I have still not fixed the weird r2_score values
+
 # --- PLOTTING STYLE CONFIGURATION ---
 plt.rcParams['font.family'] = 'arial'
 plt.rcParams['font.size'] = 12
@@ -120,7 +125,7 @@ def load_envimet_series(nc_folder_path, x_idx, y_idx, z_idx, cache_dir):
                 pt = ds.isel(GridsI=x_idx, GridsJ=y_idx, GridsK=z_idx)
                 chunk = pd.DataFrame({
                     'PM2.5': pt['PM25Conc'].values,
-                    'PM10': pt['PMCoarseConc'].values   #ENVI-met mistakenly labels PM10 as PMcoarse. In reality PMcoarse is a term describing particles with a diameter ranging from 2.5 to 10µm (PM10-2.5)
+                    'PM10': pt['PM10Conc'].values #ENVIcore added correct PM10Conc variable
                 }, index=pd.to_datetime(pt['Time'].values))
                 data_frames.append(chunk)
         df = pd.concat(data_frames).sort_index()
@@ -232,7 +237,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
         # Traffic Fill (Secondary Axis)
         ax2 = ax.twinx()
         ax2.fill_between(t_diurnal.index, 0, t_diurnal, color='gray', alpha=0.15, label='Traffic')
-        ax2.set_ylabel("Traffic Vol.", color='gray', fontsize=10)
+        ax2.set_ylabel("Traffic Vol. [Veh./h]", color='gray', fontsize=10)
         ax2.tick_params(axis='y', labelcolor='gray')
         ax2.set_ylim(0, None)
 
@@ -340,18 +345,24 @@ if __name__ == "__main__":
     # Paths (Update these)
     csv_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\Berlin_Feinstaub_Messdaten.csv"
     fox_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2.FOX"
-    traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_LEIPZ1.CSV"
-    netcdf_folder = r"Z:\Linde\Pascal\20241106_messstation3_3m_realBG2_lineSrc\NetCDF"
+    traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_LEIPZ1_lineCount2.CSV"
+    netcdf_folder = r"Z:\Linde\Pascal\20241106_messstation3_3m_realBG2_lineSrc3\NetCDF"
     base_out_dir = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting"
     cache_dir = os.path.join(base_out_dir, "Data_Cache")
     os.makedirs(cache_dir, exist_ok=True)
     
     # Define coordinates once here
-    target_coords = (134, 104, 3)
+    target_coords = (134, 104, 3) #area5_4m: 101, 92, 3      #messstation3_3m: 134, 104, 3
     
     # 1. Load Model Data first to define time range
-    model_df, sim_name = load_envimet_series(netcdf_folder, *target_coords, cache_dir) #area5_4m: 101, 92, 3      #messstation3_3m: 134, 104, 3
-    t_start, t_end = model_df.index.min(), model_df.index.max()
+    model_df, sim_name = load_envimet_series(netcdf_folder, *target_coords, cache_dir) 
+    # --- UPDATED SECTION ---
+    # Define start as the second hour (index.min + 1 hour) to skip initialization
+    t_start = model_df.index.min() + pd.Timedelta(hours=1) 
+    t_end = model_df.index.max()
+    # Slice the model dataframe immediately to the new range
+    model_df = model_df.loc[t_start:t_end]
+    # -----------------------
 
     # 2. Load other files limited to sim range
     meas_df = load_measurements(csv_file, t_start, t_end)
