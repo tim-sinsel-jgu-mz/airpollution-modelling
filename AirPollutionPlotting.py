@@ -243,17 +243,17 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
             stats_str = (
                 f"$r_{{pearson}} = {stats['r']:.2f}$\n"
                 f"$r^2_{{pearson}} = {stats['r2_pearson']:.2f}$\n"
-                f"Spearman = {stats['rho']:.2f}\n"
+                f"Spearman = {stats['rho']:.2f}\n\n"
                # f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
                 f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
-                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n"
+                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n\n"
                 f"MAE = {stats['mae']:.2f}\n"
                 f"NMSE = {stats['nmse']:.2f}\n"
                 f"RMSE = {stats['rmse']:.2f}\n"
-                f"NRMSE = {stats['nrmse']:.2f}\n"
+                f"NRMSE = {stats['nrmse']:.2f}\n\n"
                 f"MB = {stats['mean_bias']:.2f}\n"
                 f"NMB = {stats['nmb']:.2f}\n"
-                f"FB = {stats['fb']:.2f}\n"
+                f"FB = {stats['fb']:.2f}\n\n"
                 f"FAC2 = {stats['fac2']:.2f}\n"
                 f"d = {stats['ioa']:.2f}\n"
             )
@@ -344,17 +344,17 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
                 f"$y = {m:.2f}x + {b:.2f}$\n"
                 f"$r_{{pearson}} = {stats['r']:.2f}$\n"
                 f"$r^2_{{pearson}} = {stats['r2_pearson']:.2f}$\n"
-                f"Spearman = {stats['rho']:.2f}\n"
+                f"Spearman = {stats['rho']:.2f}\n\n"
                # f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
                 f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
-                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n"
+                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n\n"
                 f"MAE = {stats['mae']:.2f}\n"
                 f"NMSE = {stats['nmse']:.2f}\n"
                 f"RMSE = {stats['rmse']:.2f}\n"
-                f"NRMSE = {stats['nrmse']:.2f}\n"
+                f"NRMSE = {stats['nrmse']:.2f}\n\n"
                 f"MB = {stats['mean_bias']:.2f}\n"
                 f"NMB = {stats['nmb']:.2f}\n"
-                f"FB = {stats['fb']:.2f}\n"
+                f"FB = {stats['fb']:.2f}\n\n"
                 f"FAC2 = {stats['fac2']:.2f}\n"
                 f"d = {stats['ioa']:.2f}\n"
             )
@@ -431,14 +431,14 @@ if __name__ == "__main__":
     csv_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\Berlin_Feinstaub_Messdaten.csv"
     fox_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2.FOX"
     traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_LEIPZ1_lineCount2.CSV"
-    netcdf_folder = r"Z:\Linde\Pascal\20240715_messstation3_3m_realBG2_lineSrc3\NetCDF"
+    netcdf_folder = r"Z:\Linde\Pascal\20241106_messstation3_3m_realBG2_lineSrc3\NetCDF"
     base_out_dir = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting"
     cache_dir = os.path.join(base_out_dir, "Data_Cache")
     os.makedirs(cache_dir, exist_ok=True)
     
     # --- OPTIONAL EXTENDED CORRELATION CONFIG ---
     CALC_EXTENDED_CORR = True
-    ext_corr_filename = f"Extendend_Correlation_Stats_{os.path.basename(netcdf_folder)}.csv"
+    ext_corr_filename = f"Extendend_Correlation_Stats_{os.path.basename(netcdf_folder.replace(r"\NetCDF", ""))}.csv"
     ext_corr_path = os.path.join(base_out_dir, ext_corr_filename)
     # --------------------------------------------
     
