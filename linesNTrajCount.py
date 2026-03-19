@@ -215,7 +215,7 @@ for feat in final_layer.getFeatures():
         "desc": f"Traffic Line {envi_id}",
         "col": "81E908",
         "grp": "Emitters",
-        "height": 0.5,
+        "height": 0.2,
         "geom": "line", # Changed from "point" to "line"
         "emissionUsr": em_usr,
         "emissionNO": em_no,
