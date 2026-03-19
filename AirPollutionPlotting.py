@@ -76,18 +76,11 @@ def load_fox_background(fox_path, target_start, target_end):
             dt = dt.replace(year=target_start.year) 
             
             pol = ts['backgrPollutants']
-            # Extract Wind from the first profile entry (usually 10m)
-            wind_prof = ts.get('windProfile', [{}])[0]
-            ws = wind_prof.get('wSpdValue', np.nan)
-            wd = wind_prof.get('wDirValue', np.nan)
-
             
             records.append({
                 'Datetime': dt,
                 'PM10_BG': pol.get('PM10', 0),
                 'PM2.5_BG': pol.get('PM25', 0),
-                'WindSpeed': float(ws),
-                'WindDir': float(wd)
             })
             
         df_fox = pd.DataFrame(records).set_index('Datetime').sort_index()
@@ -227,6 +220,7 @@ def get_incremented_filename(out_dir, base_name):
 def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_dir, sim_name, coords):
     """Generates 2x1 Diurnal and 2x1 Regression plots with stats boxes and fixed gaps."""
     date_str = df_model.index[0].strftime('%d.%m.%Y')
+    stats_export_list = [] # List to collect all regression stats
     x_idx, y_idx, z_idx = coords
     header_str = f"Simulation: {sim_name} | Grid: X={x_idx}, Y={y_idx}, Z={z_idx}"
     
@@ -276,7 +270,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
         # Pollution Lines
         ax.plot(m_diurnal.index, m_diurnal, 'k-', label='Measured', zorder=5)
         ax.plot(s_diurnal.index, s_diurnal, '#D62728', label='Modelled', zorder=6)
-        ax.plot(f_diurnal.index, f_diurnal, color='gray', linestyle='--', label='Background (FOX)', zorder=4)
+        ax.plot(f_diurnal.index, f_diurnal, color='gray', linestyle='--', label='Background', zorder=4)
 
         # Stats Box (Diurnal)
         ax.text(1.25, 0.95, stats_str, transform=ax.transAxes, verticalalignment='top',
@@ -311,10 +305,10 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
     # Adjust layout to make room for stats on the right (right=0.75)
     plt.subplots_adjust(right=0.75, left=0.1, bottom=0.1, top=0.92, hspace=0.3)
     
-    base_filename = f"Diurnal_Final_{sim_name}.png"
+    base_filename = f"Diurnal_{sim_name}.png"
     save_path = get_incremented_filename(out_dir, base_filename)
     plt.savefig(save_path)
-    base_filename = f"Diurnal_Final_{sim_name}.svg"
+    base_filename = f"Diurnal_{sim_name}.svg"
     save_path = get_incremented_filename(out_dir, base_filename)
     plt.savefig(save_path)
     
@@ -330,6 +324,12 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
         if len(x) > 1:
             stats = calculate_statistics(x, y)
             m, b = np.polyfit(x, y, 1)
+            
+            # --- Append to export list ---
+            stats_row = {'Pollutant': pol, 'Comparison': 'Model vs Measured', 'm': m, 'b': b}
+            stats_row.update(stats)
+            stats_export_list.append(stats_row)
+            # -----------------------------
             
             # Scatter, 1:1 Line, and Regression Line. And now FAC2 lines
             ax.scatter(x, y, alpha=0.5, s=20, edgecolors='none')
@@ -376,55 +376,106 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
 
     plt.subplots_adjust(right=0.7, left=0.15, wspace=0.4, hspace=0.3)
     
-    base_filename = f"Regression_Final_{sim_name}.png"
+    base_filename = f"Regression_{sim_name}.png"
     save_path = get_incremented_filename(out_dir, base_filename)
     plt.savefig(save_path)
-    base_filename = f"Regression_Final_{sim_name}.svg"
+    base_filename = f"Regression_{sim_name}.svg"
     save_path = get_incremented_filename(out_dir, base_filename)
     plt.savefig(save_path)
    
-def export_extended_correlations(df_model, df_meas, df_fox, out_csv_path):
-    """Calculates Pearson r, R2, and Spearman rho for pollutants vs multiple variables."""
-    print("--- Calculating Extended Correlations ---")
-    
-    # Decompose circular Wind Direction into linear U/V components
-    wd_rad = np.radians(df_fox['WindDir'])
-    df_fox_ext = df_fox.copy()
-    df_fox_ext['WindDir_sin'] = np.sin(wd_rad) # East-West 
-    df_fox_ext['WindDir_cos'] = np.cos(wd_rad) # North-South
-    
-    # Combine everything into one DF for aligned row-by-row calculations
-    df_all = pd.concat([
-        df_model[['PM10', 'PM2.5']].add_prefix('Mod_'),
-        df_meas[['PM10', 'PM2.5']].add_prefix('Meas_'),
-        df_fox_ext[['PM10_BG', 'PM2.5_BG', 'WindSpeed', 'WindDir_sin', 'WindDir_cos']]
-    ], axis=1)
-    
-    results = []
-    targets = [
-        ('Meas_PM10', 'Measured PM10'), ('PM10_BG', 'Background PM10'),
-        ('Meas_PM2.5', 'Measured PM2.5'), ('PM2.5_BG', 'Background PM2.5'),
-        ('WindSpeed', 'Wind Speed'), 
-        ('WindDir_sin', 'Wind Dir (Sine/EW)'), ('WindDir_cos', 'Wind Dir (Cosine/NS)')
-    ]
+    # 3. BACKGROUND REGRESSION PLOT (2 rows, 1 column)
+    fig, axes = plt.subplots(2, 1, figsize=(6, 10))
+    fig.suptitle(f"{header_str}\nModel vs Background", fontsize=12, fontweight='bold', y=0.98) 
+    for i, pol in enumerate(pollutants):
+        ax = axes[i]
+        x_raw, y_raw = df_fox[f"{pol}_BG"], df_model[pol]
+        mask = x_raw.notna() & y_raw.notna()
+        x, y = x_raw[mask], y_raw[mask]
+        
+        if len(x) > 1:
+            stats = calculate_statistics(x, y)
+            m, b = np.polyfit(x, y, 1)
+            
+            # --- Append to export list ---
+            stats_row = {'Pollutant': pol, 'Comparison': 'Model vs Background', 'm': m, 'b': b}
+            stats_row.update(stats)
+            stats_export_list.append(stats_row)
+            # -----------------------------
+            
+            # Scatter, 1:1 Line, and Regression Line. And now FAC2 lines
+            ax.scatter(x, y, alpha=0.5, s=20, edgecolors='none')
+            lim = max(x.max(), y.max()) * 1.1
+            ax.plot([0, lim], [0, lim], 'k--', alpha=0.3, label='1:1')
+            ax.plot(x, m*x + b, color='#D62728', linewidth=1.5, label='Fit')
+            ax.plot([0, lim], [0, 0.5*lim], 'k--', alpha=0.2, linewidth=0.8, label='FAC2', zorder=1)
+            ax.plot([0, lim], [0, 2*lim], 'k--', alpha=0.2, linewidth=0.8, zorder=1)
+            
+            # Stats Box (Background Regression)
+            stats_str = (
+                f"$y = {m:.2f}x + {b:.2f}$\n"
+                f"$r_{{pearson}} = {stats['r']:.2f}$\n"
+                f"$r^2_{{pearson}} = {stats['r2_pearson']:.2f}$\n"
+                f"Spearman = {stats['rho']:.2f}\n\n"
+                f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
+                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n\n"
+                f"MAE = {stats['mae']:.2f}\n"
+                f"RMSE = {stats['rmse']:.2f}\n"
+                f"NMSE = {stats['nmse']:.2f}\n"
+                f"NRMSE = {stats['nrmse']:.2f}\n\n"
+                f"MB = {stats['mean_bias']:.2f}\n"
+                f"NMB = {stats['nmb']:.2f}\n"
+                f"FB = {stats['fb']:.2f}\n\n"
+                f"FAC2 = {stats['fac2']:.2f}\n"
+                f"d = {stats['ioa']:.2f}\n"
+            )
+            
+            ax.text(1.1, 0.5, stats_str, transform=ax.transAxes, verticalalignment='center', horizontalalignment='left',
+                    fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+            
+            ax.set_xlim(0, lim)
+            ax.set_ylim(0, lim)
+            ax.set_aspect('equal')
+            ax.xaxis.set_minor_locator(AutoMinorLocator())
+            ax.yaxis.set_minor_locator(AutoMinorLocator())
+        else:
+            ax.text(0.5, 0.5, "Insufficient Data", ha='center')
 
-    for pol in ['PM10', 'PM2.5']:
-        for target_col, target_label in targets:
-            valid = df_all[[f'Mod_{pol}', target_col]].dropna()
-            if len(valid) > 1:
-                x, y = valid[f'Mod_{pol}'], valid[target_col]
-                r = np.corrcoef(x, y)[0, 1]
-                rho, _ = spearmanr(x, y)
-                results.append({
-                    'Sim_Variable': pol,
-                    'Correlated_Against': target_label,
-                    'Pearson_r': r,
-                    'R_Squared': r**2,
-                    'Spearman_rho': rho
-                })
+        ax.set_title(f"{pol} Regression (Background)", fontweight='bold')
+        ax.set_xlabel("Background [µg m$^{-3}$]")
+        ax.set_ylabel("Modelled [µg m$^{-3}$]")
 
-    pd.DataFrame(results).to_csv(out_csv_path, index=False, sep=';', decimal=',')
-    print(f"Stats saved to: {out_csv_path}")
+    plt.subplots_adjust(right=0.7, left=0.15, wspace=0.4, hspace=0.3)
+    
+    base_filename = f"Regression_BG_{sim_name}.png"
+    save_path = get_incremented_filename(out_dir, base_filename)
+    plt.savefig(save_path)
+    base_filename = f"Regression_BG_{sim_name}.svg"
+    save_path = get_incremented_filename(out_dir, base_filename)
+    plt.savefig(save_path)
+    
+    # --- ADD STATS FOR MEASURED VS BACKGROUND ---
+    for pol in pollutants:
+        x_raw, y_raw = df_fox[f"{pol}_BG"], df_meas[pol]
+        mask = x_raw.notna() & y_raw.notna()
+        x, y = x_raw[mask], y_raw[mask]
+        
+        if len(x) > 1:
+            stats = calculate_statistics(x, y)
+            m, b = np.polyfit(x, y, 1)
+            
+            # Append to export list
+            stats_row = {'Pollutant': pol, 'Comparison': 'Measured vs Background', 'm': m, 'b': b}
+            stats_row.update(stats)
+            stats_export_list.append(stats_row)
+    # --------------------------------------------
+    
+    # --- Export Collected Stats to CSV ---
+    if stats_export_list:
+        base_filename = f"Stats_{os.path.basename(netcdf_folder.replace(r"\NetCDF", ""))}.csv"
+        save_path = get_incremented_filename(out_dir, base_filename)
+        pd.DataFrame(stats_export_list).to_csv(save_path, index=False, sep=';', decimal=',')
+        print(f"Regression stats saved to: {save_path}")
+        
    
 if __name__ == "__main__":
     # Paths (Update these)
@@ -436,23 +487,15 @@ if __name__ == "__main__":
     cache_dir = os.path.join(base_out_dir, "Data_Cache")
     os.makedirs(cache_dir, exist_ok=True)
     
-    # --- OPTIONAL EXTENDED CORRELATION CONFIG ---
-    CALC_EXTENDED_CORR = True
-    ext_corr_filename = f"Corr_Stats_{os.path.basename(netcdf_folder.replace(r"\NetCDF", ""))}.csv"
-    ext_corr_path = os.path.join(base_out_dir, ext_corr_filename)
-    # --------------------------------------------
-    
     # Define coordinates once here
-    target_coords = (134, 104, 3) #area5_4m: 101, 92, 3      #messstation3_3m: 134, 104, 3
+    target_coords = (134, 104, 3 ) #area5_4m: 101, 92, 3      #messstation3_3m: 134, 104, 3
     
     # 1. Load Model Data first to define time range
     model_df, sim_name = load_envimet_series(netcdf_folder, *target_coords, cache_dir) 
-    # --- UPDATED SECTION ---
-    # Define start as the second hour (index.min + 1 hour) to skip initialization
-    t_start = model_df.index.min() + pd.Timedelta(hours=1) 
+    
+    # Define the full time range for loading data correctly
+    t_start = model_df.index.min()
     t_end = model_df.index.max()
-    # Slice the model dataframe immediately to the new range
-    model_df = model_df.loc[t_start:t_end]
     # -----------------------
 
     # 2. Load other files limited to sim range
@@ -466,6 +509,11 @@ if __name__ == "__main__":
     
     # Final cleanup: Ensure all dataframes have the exact same index
     common_idx = model_hourly.index.intersection(meas_df.index)
+    
+    # --- SURGICAL FIX: Explicitly drop any timestamp that lands on hour 00:00 ---
+    if not common_idx.empty:
+        common_idx = common_idx[common_idx.hour != 0]
+    # ----------------------------------------------------------------------------
 
     if common_idx.empty:
         print("Error: No overlapping timestamps found between measurements and model!")
@@ -473,15 +521,4 @@ if __name__ == "__main__":
         plot_final_results(meas_df.loc[common_idx], model_hourly.loc[common_idx], 
                            fox_df.loc[common_idx], traffic_df.loc[common_idx], 
                            ['PM2.5', 'PM10'], base_out_dir, sim_name, target_coords)
-        
-        # --- NEW TRIGGER FOR EXTENDED CORRELATIONS ---
-        if CALC_EXTENDED_CORR:
-            export_extended_correlations(
-                model_hourly.loc[common_idx], 
-                meas_df.loc[common_idx], 
-                fox_df.loc[common_idx], 
-                ext_corr_path
-            )
-        # ---------------------------------------------
-        
         print("Processing Complete.")
