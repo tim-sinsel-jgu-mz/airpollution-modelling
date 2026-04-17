@@ -9,9 +9,6 @@ from matplotlib.ticker import AutoMinorLocator
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from scipy.stats import spearmanr
 
-# version 2.8.1:
-# Now optionally also outputs a CSV table with correlation values for the relationships of sim result concentrations with: measured concentrations, background concentrations, input wind speed, input wind direction.
-# Metrics calculated for that: Pearson r, R-squared, Spearmans Rank Correlation
 
 # --- PLOTTING STYLE CONFIGURATION ---
 plt.rcParams['font.family'] = 'arial'
@@ -255,10 +252,10 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
             stats_str = "No Data"
 
         # Diurnal Averages - REINDEX to range(24) to prevent lines connecting across gaps
-        m_diurnal = df_meas.groupby(df_meas.index.hour)[pol].mean().reindex(range(24))
-        s_diurnal = df_model.groupby(df_model.index.hour)[pol].mean().reindex(range(24))
-        f_diurnal = df_fox.groupby(df_fox.index.hour)[f"{pol}_BG"].mean().reindex(range(24))
-        t_diurnal = df_traffic.groupby(df_traffic.index.hour)['Traffic'].mean().reindex(range(24))
+        m_diurnal = df_meas.groupby(df_meas.index.hour)[pol].mean().reindex(range(1, 24))
+        s_diurnal = df_model.groupby(df_model.index.hour)[pol].mean().reindex(range(1, 24))
+        f_diurnal = df_fox.groupby(df_fox.index.hour)[f"{pol}_BG"].mean().reindex(range(1, 24))
+        t_diurnal = df_traffic.groupby(df_traffic.index.hour)['Traffic'].mean().reindex(range(1, 24))
 
         # Traffic Fill (Secondary Axis)
         ax2 = ax.twinx()
@@ -480,15 +477,15 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
 if __name__ == "__main__":
     # Paths (Update these)
     csv_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\Berlin_Feinstaub_Messdaten.csv"
-    fox_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2.FOX"
+    fox_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2_fix0626.FOX"
     traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_LEIPZ1_lineCount2.CSV"
-    netcdf_folder = r"Z:\Linde\Pascal\20240715_messstation3_3m_realBG2_lineSrc3\NetCDF"
+    netcdf_folder = r"Z:\Linde\Pascal\20240715_area5_4m_realBG2_lineSrc3\NetCDF"
     base_out_dir = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting"
     cache_dir = os.path.join(base_out_dir, "Data_Cache")
     os.makedirs(cache_dir, exist_ok=True)
     
     # Define coordinates once here
-    target_coords = (134, 104, 3 ) #area5_4m: 101, 92, 3      #messstation3_3m: 134, 104, 3
+    target_coords = (101, 92, 3) #area5_4m: 101, 92, 3      #messstation3_3m: 134, 104, 3
     
     # 1. Load Model Data first to define time range
     model_df, sim_name = load_envimet_series(netcdf_folder, *target_coords, cache_dir) 
@@ -509,11 +506,11 @@ if __name__ == "__main__":
     
     # Final cleanup: Ensure all dataframes have the exact same index
     common_idx = model_hourly.index.intersection(meas_df.index)
-    
-    # --- SURGICAL FIX: Explicitly drop any timestamp that lands on hour 00:00 ---
+
+    # --- NEW: Drop the first aligned hour to skip initialization ---
     if not common_idx.empty:
-        common_idx = common_idx[common_idx.hour != 0]
-    # ----------------------------------------------------------------------------
+        common_idx = common_idx[common_idx > common_idx.min()]
+    # ---------------------------------------------------------------
 
     if common_idx.empty:
         print("Error: No overlapping timestamps found between measurements and model!")
