@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-from scipy.stats import spearmanr
+from scipy.stats import pearsonr, spearmanr
 
 
 # --- PLOTTING STYLE CONFIGURATION ---
@@ -141,14 +141,23 @@ def calculate_statistics(x, y):
     mask = x.notna() & y.notna()
     x = x[mask]
     y = y[mask]
+    n = len(x) # Sample size
 
     if len(x) < 2:
         return None
-
+    
+    # Linear Regression for Systematic/Unsystematic components
+    # y = m*x + b (Modelled as function of Measured)
+    m, b = np.polyfit(x, y, 1)
+    y_hat = m * x + b  # The 'predicted' values from the linear fit
+    
     # Correlations
-    r = np.corrcoef(x, y)[0, 1]
-    r2_pearson = r**2
-    rho, _ = spearmanr(x, y)
+    #r = np.corrcoef(x, y)[0, 1]
+    r_pearson, p_pearson = pearsonr(x, y)
+    #r2_pearson = r**2
+    r2_pearson = r_pearson**2
+    #rho, _ = spearmanr(x, y)
+    rho_spearman, p_spearman = spearmanr(x, y)
 
     # Regression R² (predictive skill)
     r2_reg = r2_score(x, y)
@@ -159,13 +168,15 @@ def calculate_statistics(x, y):
     
     # Errors
     mae = mean_absolute_error(x, y)
-    nmse = np.mean((x - y)**2) / (mean_obs * mean_mod) if (mean_obs * mean_mod) != 0 else np.nan
     rmse = np.sqrt(mean_squared_error(x, y))
+    rmse_s = np.sqrt(np.mean((y_hat - x)**2))
+    rmse_u = np.sqrt(np.mean((y - y_hat)**2))
     nrmse = rmse / mean_obs if mean_obs != 0 else np.nan
+    nmse = np.mean((x - y)**2) / (mean_obs * mean_mod) if (mean_obs * mean_mod) != 0 else np.nan
 
     # Mean Bias
     mean_bias = np.mean(y - x)
-    nmb = np.sum(y - x) / np.sum(x) if np.sum(x) != 0 else np.nan
+    nmb = mean_bias / mean_obs if mean_obs != 0 else np.nan
 
     # Fractional Bias
     fb = 2 * np.mean((y - x) / (y + x))
@@ -177,23 +188,34 @@ def calculate_statistics(x, y):
     # Index of Agreement (Willmott)
     denominator = np.sum((np.abs(y - mean_obs) + np.abs(x - mean_obs))**2)
     ioa = 1 - (np.sum((y - x)**2) / denominator) if denominator != 0 else np.nan
+    
+    
 
     return {
-        "r": r,
+        #"r": r,
+        "r": r_pearson,
+        "p_pearson": p_pearson,
         "r2_pearson": r2_pearson,
         "r2_reg": r2_reg,
-        "rho": rho,
+        #"rho": rho,
+        "rho": rho_spearman,
+        "p_spearman": p_spearman,
+        "n": n,
         "mean_obs": mean_obs,
         "mean_mod": mean_mod,
         "mae": mae,
         "nmse": nmse,
         "rmse": rmse,
+        "rmse_s": rmse_s,
+        "rmse_u": rmse_u,
         "nrmse": nrmse,
         "mean_bias": mean_bias,
         "nmb": nmb,
         "fb": fb,
         "fac2": fac2,
-        "ioa": ioa
+        "ioa": ioa,
+        "m": m,
+        "b": b
     }
 
 def get_incremented_filename(out_dir, base_name):
@@ -231,17 +253,24 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
         stats = calculate_statistics(df_meas[pol], df_model[pol])
 
         if stats is not None:
+            p_val_str = f"{stats['p_pearson']:.3f}" if stats['p_pearson'] >= 0.001 else "< 0.001"
+            
             stats_str = (
-                f"$r_{{pearson}} = {stats['r']:.2f}$\n"
-                f"$r^2_{{pearson}} = {stats['r2_pearson']:.2f}$\n"
-                f"Spearman = {stats['rho']:.2f}\n\n"
-               # f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
-                f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
-                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n\n"
-                f"MAE = {stats['mae']:.2f}\n"
+                f"$\\bar{{O}} = {stats['mean_obs']:.2f}$\n"
+                f"$\\bar{{P}} = {stats['mean_mod']:.2f}$\n\n"
+                #f"$r = {stats['r']:.2f}$\n"
+                f"$r = {stats['r']:.2f}$ ($p={p_val_str}$)\n"
+                f"$r^2 = {stats['r2_pearson']:.2f}$\n"
+                #f"ρ = {stats['rho']:.2f}\n\n"
+                f"ρ = {stats['rho']:.2f}\n\n"
+                #f"$N = {stats['n']}$\n\n"
+                #f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
                 f"RMSE = {stats['rmse']:.2f}\n"
-                f"NMSE = {stats['nmse']:.2f}\n"
-                f"NRMSE = {stats['nrmse']:.2f}\n\n"
+                f"$RMSE_s$ = {stats['rmse_s']:.2f}\n"
+                f"$RMSE_u$ = {stats['rmse_u']:.2f}\n"
+                f"NRMSE = {stats['nrmse']:.2f}\n"
+                #f"NMSE = {stats['nmse']:.2f}\n"
+                f"MAE = {stats['mae']:.2f}\n\n"
                 f"MB = {stats['mean_bias']:.2f}\n"
                 f"NMB = {stats['nmb']:.2f}\n"
                 f"FB = {stats['fb']:.2f}\n\n"
@@ -271,7 +300,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
 
         # Stats Box (Diurnal)
         ax.text(1.25, 0.95, stats_str, transform=ax.transAxes, verticalalignment='top',
-                fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+                fontsize=12, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
 
         ax.set_title(f"Diurnal Cycle: {pol}", fontweight='bold')
         ax.set_ylabel("Conc. [µg m$^{-3}$]")
@@ -337,18 +366,25 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
             ax.plot([0, lim], [0, 2*lim], 'k--', alpha=0.2, linewidth=0.8, zorder=1)
             
             # Stats Box (Regression)
+            p_val_str = f"{stats['p_pearson']:.3f}" if stats['p_pearson'] >= 0.001 else "< 0.001"
+            
             stats_str = (
                 f"$y = {m:.2f}x + {b:.2f}$\n"
-                f"$r_{{pearson}} = {stats['r']:.2f}$\n"
-                f"$r^2_{{pearson}} = {stats['r2_pearson']:.2f}$\n"
-                f"Spearman = {stats['rho']:.2f}\n\n"
-               # f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
-                f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
-                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n\n"
-                f"MAE = {stats['mae']:.2f}\n"
+                f"$\\bar{{O}} = {stats['mean_obs']:.2f}$\n"
+                f"$\\bar{{P}} = {stats['mean_mod']:.2f}$\n\n"
+                #f"$r = {stats['r']:.2f}$\n"
+                f"$r = {stats['r']:.2f}$ ($p={p_val_str}$)\n"
+                f"$r^2 = {stats['r2_pearson']:.2f}$\n"
+                #f"ρ = {stats['rho']:.2f}\n\n"
+                f"ρ = {stats['rho']:.2f}\n\n"
+                #f"$N = {stats['n']}$\n\n"
+                #f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
                 f"RMSE = {stats['rmse']:.2f}\n"
-                f"NMSE = {stats['nmse']:.2f}\n"
-                f"NRMSE = {stats['nrmse']:.2f}\n\n"
+                f"$RMSE_s$ = {stats['rmse_s']:.2f}\n"
+                f"$RMSE_u$ = {stats['rmse_u']:.2f}\n"
+                f"NRMSE = {stats['nrmse']:.2f}\n"
+                #f"NMSE = {stats['nmse']:.2f}\n"
+                f"MAE = {stats['mae']:.2f}\n\n"
                 f"MB = {stats['mean_bias']:.2f}\n"
                 f"NMB = {stats['nmb']:.2f}\n"
                 f"FB = {stats['fb']:.2f}\n\n"
@@ -357,7 +393,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
             )
             
             ax.text(1.1, 0.5, stats_str, transform=ax.transAxes, verticalalignment='center', horizontalalignment='left',
-                    fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+                    fontsize=12, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
             
             ax.set_xlim(0, lim)
             ax.set_ylim(0, lim)
@@ -408,17 +444,25 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
             ax.plot([0, lim], [0, 2*lim], 'k--', alpha=0.2, linewidth=0.8, zorder=1)
             
             # Stats Box (Background Regression)
+            p_val_str = f"{stats['p_pearson']:.3f}" if stats['p_pearson'] >= 0.001 else "< 0.001"
+            
             stats_str = (
                 f"$y = {m:.2f}x + {b:.2f}$\n"
-                f"$r_{{pearson}} = {stats['r']:.2f}$\n"
-                f"$r^2_{{pearson}} = {stats['r2_pearson']:.2f}$\n"
-                f"Spearman = {stats['rho']:.2f}\n\n"
-                f"$Mean_{{obs}} = {stats['mean_obs']:.2f}$\n"
-                f"$Mean_{{mod}} = {stats['mean_mod']:.2f}$\n\n"
-                f"MAE = {stats['mae']:.2f}\n"
+                f"$\\bar{{O}} = {stats['mean_obs']:.2f}$\n"
+                f"$\\bar{{P}} = {stats['mean_mod']:.2f}$\n\n"
+                #f"$r = {stats['r']:.2f}$\n"
+                f"$r = {stats['r']:.2f}$ ($p={p_val_str}$)\n"
+                f"$r^2 = {stats['r2_pearson']:.2f}$\n"
+                #f"ρ = {stats['rho']:.2f}\n\n"
+                f"ρ = {stats['rho']:.2f}\n\n"
+                #f"$N = {stats['n']}$\n\n"
+                #f"$R^2_{{reg}} = {stats['r2_reg']:.2f}$\n"
                 f"RMSE = {stats['rmse']:.2f}\n"
-                f"NMSE = {stats['nmse']:.2f}\n"
-                f"NRMSE = {stats['nrmse']:.2f}\n\n"
+                f"$RMSE_s$ = {stats['rmse_s']:.2f}\n"
+                f"$RMSE_u$ = {stats['rmse_u']:.2f}\n"
+                f"NRMSE = {stats['nrmse']:.2f}\n"
+                #f"NMSE = {stats['nmse']:.2f}\n"
+                f"MAE = {stats['mae']:.2f}\n\n"
                 f"MB = {stats['mean_bias']:.2f}\n"
                 f"NMB = {stats['nmb']:.2f}\n"
                 f"FB = {stats['fb']:.2f}\n\n"
@@ -427,7 +471,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
             )
             
             ax.text(1.1, 0.5, stats_str, transform=ax.transAxes, verticalalignment='center', horizontalalignment='left',
-                    fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+                    fontsize=12, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
             
             ax.set_xlim(0, lim)
             ax.set_ylim(0, lim)
@@ -478,7 +522,7 @@ if __name__ == "__main__":
     # Paths (Update these)
     csv_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\Berlin_Feinstaub_Messdaten.csv"
     fox_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2_fix0626.FOX"
-    traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_LEIPZ1_lineCount2.CSV"
+    traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_messstation.CSV"
     netcdf_folder = r"Z:\Linde\Pascal\20240715_area5_4m_realBG2_lineSrc3\NetCDF"
     base_out_dir = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting"
     cache_dir = os.path.join(base_out_dir, "Data_Cache")
