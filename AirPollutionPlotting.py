@@ -339,8 +339,8 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
     plt.savefig(save_path)
     
     # 2. REGRESSION PLOT (2 rows, 1 column)
-    fig, axes = plt.subplots(2, 1, figsize=(6, 10))
-    fig.suptitle(header_str, fontsize=12, fontweight='bold', y=0.98) # Global Title
+    fig, axes = plt.subplots(2, 1, figsize=(8, 10))
+    fig.suptitle(header_str, fontsize=14, fontweight='bold', y=0.98) # Global Title
     for i, pol in enumerate(pollutants):
         ax = axes[i]
         x_raw, y_raw = df_meas[pol], df_model[pol]
@@ -407,7 +407,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
         ax.set_xlabel("Measured [µg m$^{-3}$]")
         ax.set_ylabel("Modelled [µg m$^{-3}$]")
 
-    plt.subplots_adjust(right=0.7, left=0.15, wspace=0.4, hspace=0.3)
+    plt.subplots_adjust(right=0.75, left=0.1, bottom=0.1, top=0.92, hspace=0.3)
     
     base_filename = f"Regression_{sim_name}.png"
     save_path = get_incremented_filename(out_dir, base_filename)
@@ -417,8 +417,8 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
     plt.savefig(save_path)
    
     # 3. BACKGROUND REGRESSION PLOT (2 rows, 1 column)
-    fig, axes = plt.subplots(2, 1, figsize=(6, 10))
-    fig.suptitle(f"{header_str}\nModel vs Background", fontsize=12, fontweight='bold', y=0.98) 
+    fig, axes = plt.subplots(2, 1, figsize=(8, 10))
+    fig.suptitle(f"{header_str}\nModel vs Background", fontsize=14, fontweight='bold', y=0.98) 
     for i, pol in enumerate(pollutants):
         ax = axes[i]
         x_raw, y_raw = df_fox[f"{pol}_BG"], df_model[pol]
@@ -485,7 +485,7 @@ def plot_final_results(df_meas, df_model, df_fox, df_traffic, pollutants, out_di
         ax.set_xlabel("Background [µg m$^{-3}$]")
         ax.set_ylabel("Modelled [µg m$^{-3}$]")
 
-    plt.subplots_adjust(right=0.7, left=0.15, wspace=0.4, hspace=0.3)
+    plt.subplots_adjust(right=0.75, left=0.1, bottom=0.1, top=0.92, hspace=0.3)
     
     base_filename = f"Regression_BG_{sim_name}.png"
     save_path = get_incremented_filename(out_dir, base_filename)
@@ -523,13 +523,13 @@ if __name__ == "__main__":
     csv_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\Berlin_Feinstaub_Messdaten.csv"
     fox_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2_fix0626.FOX"
     traffic_file = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\TrafficVolume_messstation.CSV"
-    netcdf_folder = r"Z:\Linde\Pascal\20240715_area5_4m_realBG2_lineSrc3\NetCDF"
+    netcdf_folder = r"Z:\Linde\Pascal\20240715_messstation3_3m_lineSrc2_wind05\NetCDF"
     base_out_dir = r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting"
     cache_dir = os.path.join(base_out_dir, "Data_Cache")
     os.makedirs(cache_dir, exist_ok=True)
     
     # Define coordinates once here
-    target_coords = (101, 92, 3) #area5_4m: 101, 92, 3      #messstation3_3m: 134, 104, 3
+    target_coords = (134, 104, 3) #area5_4m: 101, 92, 3      #messstation3_3m: 134, 104, 3
     
     # 1. Load Model Data first to define time range
     model_df, sim_name = load_envimet_series(netcdf_folder, *target_coords, cache_dir) 
