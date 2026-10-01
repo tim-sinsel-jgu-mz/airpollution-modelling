@@ -18,21 +18,21 @@ plt.rcParams['savefig.dpi'] = 300
 plt.rcParams['figure.constrained_layout.use'] = True
 
 # Datenkonfiguration
-FILE_PATH = Path(r'C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\merge7_clean_2024_Jun_Nov_smthWind_realBG2.FOX')
-CSV_MEASURED_PATH = Path(r"C:\Users\silik\OneDrive\JGU MAINZ\BACHELORARBEIT\THEMA Feinstaub Berlin\Phyton Scripts\Plotting\ber_mc190_20240601-20241130_clean.csv")
+FILE_PATH = Path(r'D:\enviprojects\Berlin_Feinstaub_LineSource\merge7_clean_2024_Jun_Nov_smthWind_realBG2_fix0626.FOX')
+CSV_MEASURED_PATH = Path(r"D:\enviprojects\Berlin_Feinstaub_LineSource\Berlin_Feinstaub_Messdaten.csv")
 
 # Zeiträume (Two 24h Days)
-DAY1_START = "14.11.2018 00:00:00"
-DAY1_END = "15.11.2018 00:00:00"
+DAY1_START = "26.06.2018 00:00:00"
+DAY1_END = "27.06.2018 00:00:00"
 
-DAY2_START = "22.11.2018 00:00:00"
-DAY2_END = "23.11.2018 00:00:00"
+DAY2_START = "08.07.2018 00:00:00"
+DAY2_END = "09.07.2018 00:00:00"
 
-DAY3_START = "25.11.2018 00:00:00"
-DAY3_END = "26.11.2018 00:00:00"
+DAY3_START = "15.07.2018 00:00:00"
+DAY3_END = "16.07.2018 00:00:00"
 
-DAY4_START = "01.01.2018 00:00:00"
-DAY4_END = "01.01.2018 00:00:00"
+DAY4_START = "06.11.2018 00:00:00"
+DAY4_END = "07.11.2018 00:00:00"
 
 DISPLAY_YEAR = 2024 #ENVI-met's FOX files use 2018 as default year. So you have to set the display year manually here.
 
@@ -394,6 +394,7 @@ def main():
         # 4. Save with all four dates in filename
         date_str = "_".join(file_dates)
         out_path = FILE_PATH.parent / f"FOX_4cols_{date_str}.svg"
+        #out_path = r"D:\Berlin_Friedrichstr_CompResults\FOX_4cols_{date_str}.svg"
         
         plt.savefig(out_path, format='svg', bbox_inches='tight')
         plt.savefig(out_path.with_suffix('.png'), format='png', bbox_inches='tight')
