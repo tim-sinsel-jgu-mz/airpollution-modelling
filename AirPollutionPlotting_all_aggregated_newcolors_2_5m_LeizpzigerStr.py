@@ -52,9 +52,7 @@ EVAL_HOURS = 24
 
 # --- HELPERS ---
 def smooth_data(series, num_points=300):
-    """Shape-preserving (PCHIP) interpolation of a pandas Series for display.
-    The curve passes through every point and never overshoots, so it adds no
-    peaks, dips or negative values that are not in the data."""
+    """Shape-preserving (PCHIP) interpolation of a pandas Series for display."""
     series = series.dropna()
     if len(series) < 3:
         return series.index.values, series.values
@@ -126,7 +124,7 @@ def load_fox_background(fox_path):
     return df.groupby(level=0).mean().sort_index()
 
 def load_traffic_profile(traffic_path):
-    print(f"--- Loading Traffic Data ---")
+    print(f"--- Loading Traffic Data: {os.path.basename(traffic_path)} ---")
     df_t = pd.read_csv(traffic_path, sep=';')
     hours = pd.to_datetime(df_t['Time'], format='%H:%M:%S').dt.hour
     return pd.Series(df_t['TrajCount'].values, index=hours.values, name='Traffic')
@@ -164,10 +162,7 @@ def load_envimet_series(nc_files, sim_name, x_idx, y_idx, z_idx, cache_dir):
     return df
 
 def evaluation_window(model_df, spinup_hours):
-    """The hourly outputs after the spin-up, midnight to midnight. The first NetCDF
-    record is the initial state at the simulation start, so a 23:00 start with 1 h
-    spin-up evaluates 00:00 of the following day to 00:00 of the day after (the
-    final output at 23:59:58 is rounded to that midnight)."""
+    """The hourly outputs after the spin-up, midnight to midnight."""
     start = model_df.index.min() + pd.Timedelta(hours=spinup_hours)
     return pd.date_range(start, periods=EVAL_HOURS + 1, freq='1h')
 
@@ -260,7 +255,7 @@ def plot_final_results(sim, pollutants, out_dir_dict, smooth_lines=False):
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
         ax.set_title(f"Diurnal Cycle: {pol}", fontweight='bold')
         ax.set_ylabel("Concentration [µg m$^{-3}$]")
-        ax.set_xlabel("Hour")
+        ax.set_xlabel("Hour of the Day (UTC+1)")
         ax.set_xlim(0, EVAL_HOURS)
         ax.set_xticks(range(0, EVAL_HOURS + 1, 4))
         ax.xaxis.set_minor_locator(AutoMinorLocator(4))
@@ -333,7 +328,7 @@ def plot_aggregated_diurnal(all_sim_data, scenario_names, pollutant_groups, out_
                 ax.tick_params(labelleft=False)
 
             if i >= (rows - 1) * cols:
-                ax.set_xlabel("Hour of the Day")
+                ax.set_xlabel("Hour of the Day (UTC+1)")
             else:
                 ax.tick_params(labelbottom=False)
 
@@ -460,8 +455,12 @@ if __name__ == "__main__":
     # Paths
     csv_file = r"D:\enviprojects\Berlin_Mehringdamm_Base\Berlin_Feinstaub_Messdaten.csv" 
     fox_file = r"D:\enviprojects\Berlin_Pollutants_LeipzigerStr\final.fox"
-    traffic_file = r"D:\enviprojects\Berlin_Pollutants_LeipzigerStr\trafficvolume.CSV"
-    base_out_dir = r"D:\Berlin_Friedrichstr_CompResults_corrected_new_2_5m_V6"
+    
+    # NEW: Split traffic files
+    traffic_file_summer = r"D:\enviprojects\Berlin_Pollutants_LeipzigerStr\trafficvolume_summer_final.CSV"
+    traffic_file_winter = r"D:\enviprojects\Berlin_Pollutants_LeipzigerStr\trafficvolume_winter_final.CSV"
+    
+    base_out_dir = r"D:\Berlin_Friedrichstr_CompResults_corrected_new_2_5m_V6_15"
 
     out_dirs = {
         'Diurnal': os.path.join(base_out_dir, "Diurnal"),
@@ -476,15 +475,13 @@ if __name__ == "__main__":
 
     # Scenario name (evaluated day) -> NetCDF folder or single .nc file
     scenarios = {
-        '20240626': r"Y:\BerlinLeipzigerStr\20240626\NetCDF",
-        '20240708': r"Y:\BerlinLeipzigerStr\20240708\NetCDF",
-        '20240715': r"Y:\BerlinLeipzigerStr\20240715\NetCDF",
-        '20241106': r"Y:\BerlinLeipzigerStr\20241106\NetCDF",
-        '20241111': r"Y:\BerlinLeipzigerStr\20241111\NetCDF",
-        '20241122': r"Y:\BerlinLeipzigerStr\20241122\NetCDF",
+        '20240626': r"Y:\BerlinLeipzigerStr_new\20240626_15\NetCDF",
+        '20240708': r"Y:\BerlinLeipzigerStr_new\20240708_15\NetCDF",
+        '20240715': r"Y:\BerlinLeipzigerStr_new\20240715_15\NetCDF",
+        '20241106': r"Y:\BerlinLeipzigerStr_new\20241106_15\NetCDF",
+        '20241111': r"Y:\BerlinLeipzigerStr_new\20241111_15\NetCDF",
+        '20241122': r"Y:\BerlinLeipzigerStr_new\20241122_15\NetCDF",
     }
-    # TEMPORARY (other machine): only the NetCDF file of 15.07. is reachable
-    #scenarios['20240715'] = r"G:\Meine Ablage\enviprojects\20240715_001.nc"
 
     target_coords = (162, 125, 3)
     pollutants_to_plot = ['PM2.5', 'PM10', 'NO', 'NO2']
@@ -496,7 +493,10 @@ if __name__ == "__main__":
 
     meas_all = load_measurements(csv_file)
     fox_all = load_fox_background(fox_file)
-    traffic_profile = load_traffic_profile(traffic_file)
+    
+    # Load both seasonal traffic profiles
+    traffic_profile_summer = load_traffic_profile(traffic_file_summer)
+    traffic_profile_winter = load_traffic_profile(traffic_file_winter)
 
     all_simulation_data = []
 
@@ -523,6 +523,14 @@ if __name__ == "__main__":
             print(f"Warning: {sim_name} has {len(common_idx)} of {len(window)} hours of the evaluation window")
         print(f"    evaluated {common_idx.min()} - {common_idx.max()} ({len(common_idx)} outputs)")
 
+        # Determine which traffic profile to use based on the scenario month
+        # Assuming YYYYMMDD format, extract the month (indices 4 and 5)
+        sim_month = int(sim_name[4:6])
+        if sim_month in [5, 6, 7, 8, 9]:  # Defined as summer/warm months
+            active_traffic_profile = traffic_profile_summer
+        else:
+            active_traffic_profile = traffic_profile_winter
+
         sim = {
             'name': sim_name,
             't0': window[0],  # 00:00 of the evaluated day, hour 0 of the diurnal plots
@@ -531,7 +539,7 @@ if __name__ == "__main__":
             # 10-min background for the diurnal line, and its value at each model output for the statistics
             'fox': fox_all.loc[common_idx.min():common_idx.max()],
             'bg': fox_all.reindex(common_idx, method='ffill'),
-            'traffic': pd.DataFrame({'Traffic': traffic_profile.reindex(common_idx.hour).values}, index=common_idx),
+            'traffic': pd.DataFrame({'Traffic': active_traffic_profile.reindex(common_idx.hour).values}, index=common_idx),
         }
         all_simulation_data.append(sim)
         plot_final_results(sim, pollutants_to_plot, out_dirs, smooth_lines=SMOOTH_PLOTS)
