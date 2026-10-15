@@ -1,29 +1,32 @@
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
-from pathlib import Path
-import matplotlib.dates as mdates
-from matplotlib.ticker import MaxNLocator
+"""Boundary conditions of the FOX forcing file per season: meteorology and background concentrations.
+
+One figure per season, one column per day and one row per quantity group:
+air temperature and specific humidity, shortwave radiation, wind, background PM,
+background NO and NO2, background ozone. One legend below the panels holds one column per row.
+
+Usage: python FOXfilePlotting_AirPollu_alldays_newcolors_newNOsplit_V7.py [fox_file] [output_folder]
+"""
 import json
+import sys
+from pathlib import Path
+
 import numpy as np
-from scipy.interpolate import make_interp_spline
-import cmcrameri.cm as cmc  # Official Crameri color library
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")  # figures are only saved, never shown
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.ticker import MaxNLocator
+from scipy.interpolate import PchipInterpolator
+import cmcrameri.cm as cmc
 
 # --------------------------
 # Config
 # --------------------------
-# Global Style Settings
-sns.set_theme(style="whitegrid", context="paper", font_scale=1)
-plt.rcParams['font.family'] = 'serif'
-plt.rcParams['font.serif'] = ['Arial']
-plt.rcParams['savefig.dpi'] = 300
-plt.rcParams['figure.constrained_layout.use'] = False # Handled manually for wspace control
-
-# Data Paths
 FILE_PATH = Path(r'D:\enviprojects\Berlin_Pollutants_LeipzigerStr\final.fox')
-CSV_MEASURED_PATH = Path(r"D:\enviprojects\Berlin_Feinstaub_LineSource_newNOsplit\Berlin_Feinstaub_Messdaten.csv") 
+OUT_DIR = None  # None: next to the FOX file
 
-# Dynamic Time Periods split by Season - Add or remove days here!
+# Days per season (model time) - add or remove days here
 SEASONS = {
     "Summer": [
         ("26.06.2024 00:00:00", "27.06.2024 00:00:00"),
@@ -37,361 +40,261 @@ SEASONS = {
     ]
 }
 
-# Plot Styling
-NUM_Y_TICKS = 6
-AXIS_LABEL_SIZE = 16
-TICK_LABEL_SIZE = 14
-LEGEND_FONT_SIZE = 14
-SHOW_GRID = True
-GRID_STYLE = {'color': '#DDDDDD', 'linestyle': '--', 'linewidth': 0.4}
-LINEWIDTH = 2.0
+# Rows with two y-axes keep fixed limits so that both axes share their grid lines
+# (same number of intervals); all other rows scale to the data of the season.
+TWIN_AXIS_LIMITS = {
+    "Summer": {'at': (15, 35), 'q': (0, 16), 'ws': (0, 1.2)},
+    "Autumn": {'at': (0, 8), 'q': (0, 8), 'ws': (0, 2.0)},
+}
+TWIN_AXIS_INTERVALS = 4
 
-# Labels
-AXIS_LABELS = {
-    'y_sw': "Shortwave Radiation\n[W/m²]",
-    'y_temp': "Air Temperature\n[°C]",
-    'y_q': "Specific Humidity\n[g/kg]",
-    'y_wind_speed': "Wind Speed\n[m/s]",
-    'y_wind_direction': "Wind Direction\n[°]",
-    'y_pollutants': "Background Concentration\n[µg/m³]"
+# Shape-preserving smoothing (PCHIP, no overshoot) of the line series; the FOX holds 10-min values
+SMOOTH = False
+
+# Plot styling
+FONT_SIZE = 14
+AXIS_LABEL_SIZE = 15
+TITLE_SIZE = 16
+LINEWIDTH = 2.0
+PANEL_WIDTH, PANEL_HEIGHT = 4.2, 2.5  # inches per day column and per row
+MARGINS = {'left': 1.35, 'right': 1.15, 'top': 0.55, 'bottom': 1.75}  # inches: axis labels, titles, legend
+GRID_STYLE = {'color': '#DDDDDD', 'linestyle': '--', 'linewidth': 0.5}
+
+plt.rcParams.update({
+    'font.family': 'sans-serif',
+    'font.sans-serif': ['Arial'],
+    'font.size': FONT_SIZE,
+    'axes.linewidth': 1.0,
+    'axes.edgecolor': '#444444',
+    'xtick.direction': 'in',
+    'ytick.direction': 'in',
+    'xtick.major.size': 4,
+    'ytick.major.size': 4,
+    'savefig.dpi': 300,
+})
+
+# Colours: background concentrations use the background colours of the diurnal plots
+COLORS = {
+    'at': cmc.roma(0.1), 'q': cmc.roma(0.9),
+    'directrad': cmc.lajolla(0.45), 'diffuserad': cmc.lajolla(0.7),
+    'ws': cmc.broc(0.1), 'wd': cmc.broc(0.9),
+    'PM25': cmc.hawaii(0.2), 'PM10': cmc.hawaii(0.7),
+    'NO': cmc.batlow(0.2), 'NO2': cmc.batlow(0.7),
+    'O3': cmc.roma(0.75),
 }
 
-# --------------------------
-# Helper Functions
-# --------------------------
-def smooth_data(dates, values, num_points=300, clip_zero=True):
-    """Applies cubic spline interpolation to smooth time series data."""
-    values = pd.to_numeric(values, errors='coerce')
-    
-    temp_df = pd.DataFrame({'dates': dates, 'values': values}).dropna()
-    
-    if len(temp_df) < 4:
-        return dates, values
-        
-    temp_df = temp_df.sort_values('dates').drop_duplicates(subset='dates')
-    
-    if len(temp_df) < 4:
-        return dates, values
-        
-    dates_num = mdates.date2num(temp_df['dates'])
-    values_clean = temp_df['values'].values
-    
-    x_smooth = np.linspace(dates_num.min(), dates_num.max(), num_points)
-    spline = make_interp_spline(dates_num, values_clean, k=3)
-    y_smooth = spline(x_smooth)
-    
-    if clip_zero:
-        y_smooth = np.maximum(y_smooth, 0)
-        
-    return mdates.num2date(x_smooth), y_smooth
+# Rows: left-axis series, right-axis series, axis labels. Series are (column, legend label).
+ROWS = [
+    {'left': [('at', 'Air temperature')], 'right': [('q', 'Specific humidity')],
+     'ylabel': "Air Temperature\n[°C]", 'ylabel_right': "Specific Humidity\n[g/kg]"},
+    {'left': [('directrad', 'Direct radiation'), ('diffuserad', 'Diffuse radiation')],
+     'ylabel': "Shortwave Radiation\n[W/m²]"},
+    {'left': [('ws', 'Wind speed')], 'right': [('wd', 'Wind direction')],
+     'ylabel': "Wind Speed\n[m/s]", 'ylabel_right': "Wind Direction"},
+    {'left': [('PM25', 'PM$_{2.5}$'), ('PM10', 'PM$_{10}$')],
+     'ylabel': "Background PM\n[µg/m³]"},
+    {'left': [('NO', 'NO'), ('NO2', 'NO$_2$')],
+     'ylabel': "Background NO$_x$\n[µg/m³]"},
+    {'left': [('O3', 'O$_3$')],
+     'ylabel': "Background O$_3$\n[µg/m³]"},
+]
 
+
+# --------------------------
+# Data
+# --------------------------
 def load_data(file_path):
     if not file_path.exists():
         print(f"Error: File not found at {file_path}")
         return None
 
     print(f"Loading file: {file_path.name}...")
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        timestep_list = data.get('timestepList', [])
-        if not timestep_list: return None
-
-        processed_data = []
-        for item in timestep_list:
-            record = {'Date': item.get('date'), 'Time': item.get('time'),
-                      'directrad': item.get('swDir', 0), 'diffuserad': item.get('swDif', 0),
-                      'lw': item.get('lwRad', 0)}
-            
-            t_prof = item.get('tProfile', [])
-            if t_prof: record['at'] = t_prof[0].get('value')
-                
-            q_prof = item.get('qProfile', [])
-            if q_prof: record['q'] = q_prof[0].get('value')
-                
-            w_prof = item.get('windProfile', [])
-            if w_prof:
-                record['ws'] = w_prof[0].get('wSpdValue')
-                record['wd'] = w_prof[0].get('wDirValue')
-                
-            bg_poll = item.get('backgrPollutants', {})
-            record['NO'] = bg_poll.get('NO', np.nan)
-            record['NO2'] = bg_poll.get('NO2', np.nan)
-            record['PM10'] = bg_poll.get('PM10', np.nan)
-            record['PM25'] = bg_poll.get('PM25', np.nan)
-            
-            processed_data.append(record)
-
-        df = pd.DataFrame(processed_data)
-        df['DateTime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
-        df = df.dropna(subset=['DateTime'])
-        return df
-
-    except Exception as e:
-        print(f"Error loading data: {e}")
+    with open(file_path, 'r', encoding='utf-8') as f:
+        timestep_list = json.load(f).get('timestepList', [])
+    if not timestep_list:
         return None
 
-def load_measured_data(csv_path):
-    if not csv_path or not csv_path.exists(): return None
-    try:
-        df = pd.read_csv(csv_path, sep=';')
-        df['DateTime'] = pd.to_datetime(df['Zeit'], format='%d.%m.%Y %H:%M')
-        
-        df['DateTime'] = df['DateTime'].dt.tz_localize('Europe/Berlin', ambiguous='NaT', nonexistent='shift_forward')\
-                                       .dt.tz_convert('Etc/GMT-1')\
-                                       .dt.tz_localize(None)
-        
-        df = df.dropna(subset=['DateTime'])
-        
-        for col in ['PM10', 'PM2_5', 'NO2', 'NO']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        return df
-    except Exception as e:
-        print(f"Error loading measured data: {e}")
-        return None
+    records = []
+    for item in timestep_list:
+        record = {'Date': item.get('date'), 'Time': item.get('time'),
+                  'directrad': item.get('swDir', 0), 'diffuserad': item.get('swDif', 0)}
+        t_prof = item.get('tProfile', [])
+        if t_prof:
+            record['at'] = t_prof[0].get('value') - 273.15
+        q_prof = item.get('qProfile', [])
+        if q_prof:
+            record['q'] = q_prof[0].get('value')
+        w_prof = item.get('windProfile', [])
+        if w_prof:
+            record['ws'] = w_prof[0].get('wSpdValue')
+            record['wd'] = w_prof[0].get('wDirValue')
+        bg = item.get('backgrPollutants', {})
+        for key in ('NO', 'NO2', 'PM10', 'PM25', 'O3'):
+            record[key] = bg.get(key, np.nan)
+        records.append(record)
 
-def filter_data(df, start_datetime, end_datetime):
-    if df is None or df.empty: return pd.DataFrame()
-    return df[(df['DateTime'] >= start_datetime) & (df['DateTime'] <= end_datetime)]
+    df = pd.DataFrame(records)
+    df['DateTime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+    df = df.dropna(subset=['DateTime'])
+    for col in ('NO', 'NO2', 'PM10', 'PM25', 'O3'):
+        df[col] = df[col].where(df[col] > -998)  # FOX no-data value -999
+    return df
 
-def format_plot(ax, y_lim=None, num_yticks=None, y_label=None, x_lim=None, yticks=None, show_ylabel=True):
-    if y_lim: ax.set_ylim(y_lim)
-    
-    if x_lim: 
-        ax.set_xlim(x_lim)
-        ticks = pd.date_range(start=x_lim[0], end=x_lim[1], freq='6h') # 6-hour intervals for cleaner look
-        ax.set_xticks(ticks)
-        
-        labels = [t.strftime("%H:%M") for t in ticks]
-        if len(labels) >= 2:
-            labels[0] = ""
-            labels[-1] = ""
-        ax.set_xticklabels(labels)
-        ax.tick_params(axis='x', which='major', length=5, direction='in', labelsize=TICK_LABEL_SIZE)
-        plt.setp(ax.get_xticklabels(), rotation=0, ha='center')
 
-    ax.tick_params(axis='y', which='major', length=0, direction='in', labelsize=TICK_LABEL_SIZE)
-    
-    if yticks is not None:
-        ax.set_yticks(yticks)
-    elif num_yticks:
-        ax.yaxis.set_major_locator(MaxNLocator(num_yticks))
-        
-    ax.grid(SHOW_GRID, **GRID_STYLE)
-    
-    if y_label and show_ylabel:
-        ax.set_ylabel(y_label, fontsize=AXIS_LABEL_SIZE, fontweight='bold', labelpad=10)
+def filter_data(df, start_dt, end_dt):
+    return df[(df['DateTime'] >= start_dt) & (df['DateTime'] <= end_dt)]
+
+
+def hours(df, start_dt):
+    return ((df['DateTime'] - start_dt) / pd.Timedelta(hours=1)).to_numpy()
+
+
+def line_data(x, y):
+    """The series as plotted: raw, or PCHIP-smoothed when SMOOTH is set."""
+    mask = np.isfinite(y)
+    x, y = x[mask], y[mask]
+    if not SMOOTH or len(x) < 3:
+        return x, y
+    x_s = np.linspace(x.min(), x.max(), 600)
+    return x_s, PchipInterpolator(x, y)(x_s)
+
+
+def nice_limit(vmax, intervals=4):
+    """Upper axis limit on a 1-2-2.5-5 grid with roughly the given number of intervals above zero."""
+    if not np.isfinite(vmax) or vmax <= 0:
+        return 1.0
+    raw = vmax * 1.05 / intervals
+    mag = 10 ** np.floor(np.log10(raw))
+    step = next(s * mag for s in (1, 2, 2.5, 5, 10) if s * mag >= raw)
+    return step * np.ceil(vmax * 1.05 / step)
+
 
 # --------------------------
-# Plotting Functions
+# Plotting
 # --------------------------
-
-def plot_temperature_humidity(df, start_dt, end_dt, ax_temp, show_ylabel, show_twin, season_name):
-    lines, labels = [], []
-    ax_humidity = ax_temp.twinx()
-    
-    if 'at' in df.columns:
-        x_s, y_s = smooth_data(df['DateTime'], df['at'] - 273.15, clip_zero=False)
-        l1 = ax_temp.plot(x_s, y_s, color=cmc.roma(0.1), linestyle='-', linewidth=LINEWIDTH, label='Air Temperature')
-        lines.extend(l1)
-        labels.append('Air Temperature')
-    if 'q' in df.columns:
-        x_s, y_s = smooth_data(df['DateTime'], df['q'])
-        l2 = ax_humidity.plot(x_s, y_s, color=cmc.roma(0.9), linestyle='-', linewidth=LINEWIDTH, label='Specific Humidity')
-        lines.extend(l2)
-        labels.append('Specific Humidity')
-        
-    # Dynamic Limits based on Season
-    if season_name == "Autumn":
-        temp_ylim, humidity_ylim = [0, 15], [0, 7.5]
-    else: # Summer
-        temp_ylim, humidity_ylim = [15, 35], [0, 15]
-
-    temp_ticks = np.linspace(temp_ylim[0], temp_ylim[1], NUM_Y_TICKS)
-    humidity_ticks = np.linspace(humidity_ylim[0], humidity_ylim[1], NUM_Y_TICKS)
-    
-    format_plot(ax_temp, y_lim=temp_ylim, yticks=temp_ticks, y_label=AXIS_LABELS['y_temp'], x_lim=[start_dt, end_dt], show_ylabel=show_ylabel)
-    format_plot(ax_humidity, y_lim=humidity_ylim, yticks=humidity_ticks, y_label=AXIS_LABELS['y_q'], show_ylabel=show_twin)
-    
-    if not show_twin:
-        ax_humidity.set_yticklabels([])
-        ax_humidity.tick_params(axis='y', length=0)
-        
-    return lines, labels
-
-def plot_sw_radiation(df, start_dt, end_dt, axdir, show_ylabel, season_name):
-    lines, labels = [], []
-    if 'directrad' in df.columns:
-        x_s, y_s = smooth_data(df['DateTime'], df['directrad'])
-        l1 = axdir.plot(x_s, y_s, color=cmc.lajolla(0.8), linestyle='-', linewidth=LINEWIDTH, label='Direct')
-        lines.extend(l1)
-        labels.append('Direct Radiation')
-    if 'diffuserad' in df.columns:
-        x_s, y_s = smooth_data(df['DateTime'], df['diffuserad'])
-        l2 = axdir.plot(x_s, y_s, color=cmc.lajolla(0.6), linestyle='-', linewidth=LINEWIDTH, label='Diffuse')
-        lines.extend(l2)
-        labels.append('Diffuse Radiation')
-
-    # Dynamic Limits based on Season
-    if season_name == "Autumn":
-        sw_ylim = [0, 500]
-        sw_ticks = np.arange(0, 501, 100)
+def plot_series(ax, x, y, column):
+    """Wind direction as dots (a line would jump across the 0/360 wrap), everything else as a line."""
+    if column == 'wd':
+        mask = np.isfinite(y)
+        ax.scatter(x[mask], y[mask], s=7, color=COLORS[column], linewidths=0, zorder=3)
     else:
-        sw_ylim = [0, 1000]
-        sw_ticks = np.arange(0, 1001, 200)
+        ax.plot(*line_data(x, y), color=COLORS[column], linewidth=LINEWIDTH, zorder=3)
 
-    format_plot(axdir, y_lim=sw_ylim, yticks=sw_ticks, y_label=AXIS_LABELS['y_sw'], x_lim=[start_dt, end_dt], show_ylabel=show_ylabel)
 
-    return lines, labels
+def legend_handle(column, label):
+    if column == 'wd':
+        return Line2D([], [], color=COLORS[column], marker='o', linestyle='', markersize=5, label=label)
+    return Line2D([], [], color=COLORS[column], linewidth=LINEWIDTH, label=label)
 
-def plot_wind(df, start_dt, end_dt, ax_speed, show_ylabel, show_twin, season_name):
-    lines, labels = [], []
-    ax_direction = ax_speed.twinx()
-    
-    if 'ws' in df.columns:
-        x_s, y_s = smooth_data(df['DateTime'], df['ws'])
-        l1 = ax_speed.plot(x_s, y_s, color=cmc.broc(0.1), linestyle='-', linewidth=LINEWIDTH, label='Wind Speed')
-        lines.extend(l1)
-        labels.append('Wind Speed')
-    if 'wd' in df.columns:
-        x_s, y_s = smooth_data(df['DateTime'], df['wd'], clip_zero=False)
-        y_s = np.clip(y_s, 0, 360) # Ensure smoothed wind direction stays within physical bounds
-        l2 = ax_direction.plot(x_s, y_s, color=cmc.broc(0.9), linestyle='-', linewidth=LINEWIDTH, label='Wind Direction')
-        lines.extend(l2)
-        labels.append('Wind Direction')
 
-    # Dynamic limits based on Season
-    if season_name == "Autumn":
-        speed_ylim = [0, 2.0]
-    else:
-        speed_ylim = [0, 1.2]
-        
-    direction_ylim = [0, 360]
-    speed_ticks = np.linspace(speed_ylim[0], speed_ylim[1], 5)
-    direction_ticks = np.arange(0, 361, 90)
+def format_x(ax, is_bottom):
+    ax.set_xlim(0, 24)
+    ax.set_xticks([0, 6, 12, 18, 24])
+    ax.set_xticklabels(['', '06:00', '12:00', '18:00', ''])
+    ax.tick_params(axis='x', labelbottom=is_bottom, labelsize=FONT_SIZE)
+    ax.grid(True, **GRID_STYLE)
 
-    format_plot(ax_speed, y_lim=speed_ylim, yticks=speed_ticks, y_label=AXIS_LABELS['y_wind_speed'], x_lim=[start_dt, end_dt], show_ylabel=show_ylabel)
-    format_plot(ax_direction, y_lim=direction_ylim, yticks=direction_ticks, y_label=AXIS_LABELS['y_wind_direction'], show_ylabel=show_twin)
-    
-    if not show_twin:
-        ax_direction.set_yticklabels([])
-        ax_direction.tick_params(axis='y', length=0)
-        
-    return lines, labels
 
-def plot_combined_pollutants(df, start_dt, end_dt, ax, target_list, df_measured, show_ylabel, season_name):
-    lines, labels = [], []
-    
-    colors = {
-        'NO': cmc.batlow(0.1),   
-        'NO2': cmc.batlow(0.7),  
-        'PM10': cmc.hawaii(0.8),  
-        'PM25': cmc.hawaii(0.2)   
-    } 
-    styles = {
-        'NO': '-', 
-        'NO2': '-', 
-        'PM10': '-', 
-        'PM25': '-'
-    }
-    
-    csv_map = {'NO': 'NO', 'NO2': 'NO2', 'PM10': 'PM10', 'PM25': 'PM2_5'}
-    
-    for pol in target_list:
-        if pol in df.columns:
-            x_s, y_s = smooth_data(df['DateTime'], df[pol])
-            l = ax.plot(x_s, y_s, color=colors[pol], linestyle=styles[pol], linewidth=LINEWIDTH, label=f"{pol} (BG)")
-            lines.extend(l)
-            labels.append(f"{pol}")
-            
-    if df_measured is not None and not df_measured.empty:
-        for pol in target_list:
-            csv_col = csv_map.get(pol)
-            if csv_col and csv_col in df_measured.columns:
-                x_s, y_s = smooth_data(df_measured['DateTime'], df_measured[csv_col])
-                l_m = ax.plot(x_s, y_s, color=colors[pol], linestyle=styles[pol], linewidth=LINEWIDTH+1, alpha=0.35, label=f"{pol} (Meas)")
-                lines.extend(l_m)
-                labels.append(f"{pol} (Meas)")
-                
-    # Both sets are bound 0 to 40 as requested
-    if season_name == "Autumn":
-        poll_ylim = [0, 40]
-    else:
-        poll_ylim = [0, 40] 
-        
-    ax.set_ylim(poll_ylim) 
-    format_plot(ax, y_lim=poll_ylim, y_label=AXIS_LABELS['y_pollutants'], x_lim=[start_dt, end_dt], show_ylabel=show_ylabel)
-    
-    return lines, labels
+def row_limits(season_name, days, df):
+    """Left-axis limits per row; rows without a twin axis scale to the maximum of the season."""
+    fixed = TWIN_AXIS_LIMITS[season_name]
+    season_df = pd.concat([filter_data(df, s, e) for s, e in days])
+    limits = []
+    for row in ROWS:
+        first = row['left'][0][0]
+        if 'right' in row:
+            limits.append(fixed[first])
+        else:
+            vmax = np.nanmax([season_df[col].max() for col, _ in row['left'] if col in season_df])
+            limits.append((0, nice_limit(vmax)))
+    return limits
 
-def main():
-    df = load_data(FILE_PATH)
-    df_meas_all = load_measured_data(CSV_MEASURED_PATH)
-    
-    if df is not None:
-        # Loop through each season and generate a separate figure
-        for season_name, days_list in SEASONS.items():
-            print(f"\n--- Processing Season: {season_name} ---")
-            num_days = len(days_list)
-            
-            if num_days == 0:
-                continue
 
-            fig, axes = plt.subplots(4, num_days, figsize=(4.5 * num_days, 14), sharey='row')
-            
-            # Adjusted bottom spacing to make room for the combined legend
-            plt.subplots_adjust(wspace=0.04, hspace=0.13, left=0.05, right=0.95, top=0.95, bottom=0.085)
+def plot_season(df, season_name, days, out_dir):
+    n_days = len(days)
+    n_rows = len(ROWS)
+    fig_w = PANEL_WIDTH * n_days + MARGINS['left'] + MARGINS['right']
+    fig_h = PANEL_HEIGHT * n_rows + MARGINS['top'] + MARGINS['bottom']
+    fig, axes = plt.subplots(n_rows, n_days, sharex=True, sharey='row', squeeze=False, figsize=(fig_w, fig_h))
+    fig.subplots_adjust(left=MARGINS['left'] / fig_w, right=1 - MARGINS['right'] / fig_w,
+                        top=1 - MARGINS['top'] / fig_h, bottom=MARGINS['bottom'] / fig_h, wspace=0.05, hspace=0.12)
 
-            all_lines = []
-            all_labels = []
+    periods = [(pd.to_datetime(s, format="%d.%m.%Y %H:%M:%S"), pd.to_datetime(e, format="%d.%m.%Y %H:%M:%S"))
+               for s, e in days]
+    limits = row_limits(season_name, periods, df)
+    fixed = TWIN_AXIS_LIMITS[season_name]
 
-            for col, (start, end) in enumerate(days_list):
-                s_dt = pd.to_datetime(start, format="%d.%m.%Y %H:%M:%S")
-                e_dt = pd.to_datetime(end, format="%d.%m.%Y %H:%M:%S")
-                
-                df_sub = filter_data(df, s_dt, e_dt)
-                df_meas_sub = filter_data(df_meas_all, s_dt, e_dt) if df_meas_all is not None else None
-                
-                date_title = s_dt.strftime("%d.%m.%Y")
-                
-                if not df_sub.empty:
-                    ax_col = [axes[row, col] if num_days > 1 else axes[row] for row in range(4)]
-                    ax_col[0].set_title(date_title, fontsize=16, fontweight='bold', pad=15)
-                    
-                    show_ylabel = (col == 0) 
-                    show_twin = (col == num_days - 1) 
-                    
-                    # Row 0: Temperature & Humidity
-                    l1, lab1 = plot_temperature_humidity(df_sub, s_dt, e_dt, ax_col[0], show_ylabel, show_twin, season_name)            
-                    
-                    # Row 1: Shortwave Radiation
-                    l2, lab2 = plot_sw_radiation(df_sub, s_dt, e_dt, ax_col[1], show_ylabel, season_name)
-                    
-                    # Row 2: Wind 
-                    l3, lab3 = plot_wind(df_sub, s_dt, e_dt, ax_col[2], show_ylabel, show_twin, season_name)
-                    
-                    # Row 3: Combined Pollutants
-                    l4, lab4 = plot_combined_pollutants(df_sub, s_dt, e_dt, ax_col[3], ['NO', 'NO2', 'PM10', 'PM25'], df_meas_sub, show_ylabel, season_name)
-                    
-                    # Collect legend components strictly from the first column to avoid duplicates
-                    if col == 0:
-                        all_lines.extend(l1 + l2 + l3 + l4)
-                        all_labels.extend(lab1 + lab2 + lab3 + lab4)
+    for c, (s_dt, e_dt) in enumerate(periods):
+        sub = filter_data(df, s_dt, e_dt)
+        if sub.empty:
+            print(f"No data found for {s_dt:%d.%m.%Y}")
+            continue
+        x = hours(sub, s_dt)
+        axes[0, c].set_title(s_dt.strftime("%d.%m.%Y"), fontsize=TITLE_SIZE, fontweight='bold', pad=10)
+
+        for r, row in enumerate(ROWS):
+            ax = axes[r, c]
+            for col, _ in row['left']:
+                if col in sub:
+                    plot_series(ax, x, sub[col].to_numpy(dtype=float), col)
+            ax.set_ylim(limits[r])
+            if 'right' in row:
+                ax.set_yticks(np.linspace(*limits[r], TWIN_AXIS_INTERVALS + 1))
+            else:
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=4, steps=[1, 2, 2.5, 5, 10]))
+            ax.tick_params(axis='y', labelsize=FONT_SIZE)
+            format_x(ax, r == n_rows - 1)
+            if c == 0:
+                ax.set_ylabel(row['ylabel'], fontsize=AXIS_LABEL_SIZE, fontweight='bold', labelpad=8)
+
+            if 'right' in row:
+                twin = ax.twinx()
+                for col, _ in row['right']:
+                    if col in sub:
+                        plot_series(twin, x, sub[col].to_numpy(dtype=float), col)
+                if row['right'][0][0] == 'wd':
+                    twin.set_ylim(0, 360)
+                    twin.set_yticks([0, 90, 180, 270, 360])
+                    twin.set_yticklabels(['N', 'E', 'S', 'W', 'N'])
                 else:
-                    print(f"No data found for {date_title}")
+                    lim = fixed[row['right'][0][0]]
+                    twin.set_ylim(lim)
+                    twin.set_yticks(np.linspace(*lim, TWIN_AXIS_INTERVALS + 1))
+                twin.tick_params(axis='y', labelsize=FONT_SIZE, labelright=(c == n_days - 1))
+                if c == n_days - 1:
+                    twin.set_ylabel(row['ylabel_right'], fontsize=AXIS_LABEL_SIZE, fontweight='bold', labelpad=8)
 
-            # Plot combined legend underneath the windows
-            if all_lines:
-                fig.legend(all_lines, all_labels, loc='lower center', bbox_to_anchor=(0.5, 0.0), 
-                           ncol=5, frameon=True, prop={'size': LEGEND_FONT_SIZE})
+    for c in range(n_days):
+        axes[-1, c].set_xlabel("Time (UTC+1)", fontsize=AXIS_LABEL_SIZE)
 
-            out_path = FILE_PATH.parent / f"FOX_Meteo_Aggregated_{season_name}.svg"
-            plt.savefig(out_path, format='svg', bbox_inches='tight')
-            plt.savefig(out_path.with_suffix('.png'), format='png', bbox_inches='tight')
-            plt.close()
-            print(f"Aggregated plot created successfully: {out_path.stem}")
+    # One legend below the panels: column k lists the series of row k (legends fill column by column)
+    groups = [[legend_handle(col, label) for col, label in row['left'] + row.get('right', [])] for row in ROWS]
+    depth = max(len(g) for g in groups)
+    blank = Line2D([], [], linestyle='', label=' ')
+    handles = [h for g in groups for h in g + [blank] * (depth - len(g))]
+    left, right = axes[-1, 0].get_position().x0, axes[-1, -1].get_position().x1
+    fig.legend(handles=handles, loc='upper center', ncol=len(groups), frameon=False, fontsize=FONT_SIZE,
+               handlelength=1.6, columnspacing=1.4, borderaxespad=0,
+               bbox_to_anchor=((left + right) / 2, (MARGINS['bottom'] - 0.85) / fig_h))
+
+    out_path = Path(out_dir) / f"FOX_Meteo_Aggregated_{season_name}.svg"
+    fig.savefig(out_path, format='svg', bbox_inches='tight')
+    fig.savefig(out_path.with_suffix('.png'), format='png', bbox_inches='tight')
+    plt.close(fig)
+    print(f"Aggregated plot created successfully: {out_path.with_suffix('.png')}")
+
+
+def main(fox_path=FILE_PATH, out_dir=OUT_DIR):
+    df = load_data(Path(fox_path))
+    if df is None:
+        return
+    out_dir = Path(out_dir) if out_dir else Path(fox_path).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for season_name, days in SEASONS.items():
+        if days:
+            print(f"\n--- Processing Season: {season_name} ---")
+            plot_season(df, season_name, days, out_dir)
+
 
 if __name__ == "__main__":
-    main()
+    main(*sys.argv[1:3])

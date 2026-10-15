@@ -283,7 +283,6 @@ def plot_final_results(sim, pollutants, out_dir_dict, smooth_lines=False):
         pd.DataFrame(stats_export_list).to_csv(save_path, index=False, sep=';', decimal=',')
 
 
-# --- AGGREGATED PLOTS ---
 def plot_aggregated_diurnal(all_sim_data, scenario_names, pollutant_groups, out_dir, smooth_lines=False):
     """One panel per configured scenario, in the configured order; scenarios without data stay empty."""
     print("--- Generating Aggregated Diurnal Plots ---")
@@ -294,20 +293,37 @@ def plot_aggregated_diurnal(all_sim_data, scenario_names, pollutant_groups, out_
     cols = 2 if n_panels > 1 else 1
     rows = int(np.ceil(n_panels / cols))
 
-    traffic_max = np.nanmax([np.nanmax(s['traffic']['Traffic'].values) for s in all_sim_data])
-    y_lim_traf = traffic_max * 1.20 if traffic_max > 0 else 100
+    # Robust traffic max calculation
+    valid_traffic = [s['traffic']['Traffic'].values for s in all_sim_data if 'traffic' in s and s['traffic'] is not None]
+    traffic_max = np.nanmax([np.nanmax(v) for v in valid_traffic if v.size > 0 and np.any(np.isfinite(v))]) if valid_traffic else np.nan
+    y_lim_traf = traffic_max * 1.20 if np.isfinite(traffic_max) and traffic_max > 0 else 100
 
     for group_name, pols in pollutant_groups.items():
-        conc_max = np.nanmax([np.nanmax(np.r_[s['meas'][p].values, s['model'][p].values, s['fox'][f"{p}_BG"].values])
-                              for s in all_sim_data for p in pols])
-        y_lim_conc = conc_max * 1.20 if conc_max > 0 else 45
+        # Robust concentration max calculation across all scenarios and pollutants in the group
+        group_vals = []
+        for s in all_sim_data:
+            for p in pols:
+                for key in ['meas', 'model']:
+                    if p in s.get(key, {}):
+                        group_vals.append(s[key][p].values)
+                bg_key = f"{p}_BG"
+                if 'fox' in s and bg_key in s['fox']:
+                    group_vals.append(s['fox'][bg_key].values)
+        
+        conc_max = np.nanmax([np.nanmax(v) for v in group_vals if v.size > 0 and np.any(np.isfinite(v))]) if group_vals else np.nan
+        y_lim_conc = conc_max * 1.20 if np.isfinite(conc_max) and conc_max > 0 else 45
 
         fig, axes = plt.subplots(rows, cols, figsize=(cols * 6, rows * 4.5), squeeze=False)
-        ax_flat = axes.flatten()
+        
+        # Use axes.T.flatten() to achieve column-major (column-wise) order
+        ax_flat = axes.T.flatten()
         legend_ax = None
 
         for i, name in enumerate(scenario_names):
             ax = ax_flat[i]
+            r = i % rows
+            c = i // rows
+
             ax.set_title(pd.to_datetime(name, format='%Y%m%d').strftime('%d.%m.%Y'), fontweight='bold')
             ax.set_xlim(0, EVAL_HOURS)
             ax.set_ylim(0, y_lim_conc)
@@ -317,17 +333,21 @@ def plot_aggregated_diurnal(all_sim_data, scenario_names, pollutant_groups, out_
 
             ax2 = ax.twinx()
             ax2.set_ylim(0, y_lim_traf)
-            if (i % cols) == (cols - 1):
+            
+            # Rightmost column gets traffic label, others hide right ticks
+            if c == cols - 1:
                 ax2.set_ylabel(TRAFFIC_LABEL, color='black', fontsize=11)
             else:
                 ax2.tick_params(labelright=False)
 
-            if (i % cols) == 0:
-                ax.set_ylabel("Concentration [µg m$^{-3}$]")
+            # Leftmost column gets concentration label, others hide left ticks
+            if c == 0:
+                ax.set_ylabel(r"Concentration [$\mu$g m$^{-3}$]")
             else:
                 ax.tick_params(labelleft=False)
 
-            if i >= (rows - 1) * cols:
+            # Bottom row gets x-axis label, others hide bottom tick labels
+            if r == rows - 1:
                 ax.set_xlabel("Hour of the Day (UTC+1)")
             else:
                 ax.tick_params(labelbottom=False)
@@ -353,12 +373,17 @@ def plot_aggregated_diurnal(all_sim_data, scenario_names, pollutant_groups, out_
         for j in range(n_panels, rows * cols):
             fig.delaxes(ax_flat[j])
 
-        handles_main, labels_main = legend_ax[0].get_legend_handles_labels()
-        handles_sec, labels_sec = legend_ax[1].get_legend_handles_labels()
-        by_label = dict(zip(labels_main + labels_sec, handles_main + handles_sec))
+        if legend_ax is not None:
+            handles_main, labels_main = legend_ax[0].get_legend_handles_labels()
+            handles_sec, labels_sec = legend_ax[1].get_legend_handles_labels()
+            by_label = dict(zip(labels_main + labels_sec, handles_main + handles_sec))
+        else:
+            by_label = {}
 
         plt.subplots_adjust(left=0.08, right=0.92, bottom=0.10, top=0.94, wspace=0.08, hspace=0.13)
-        fig.legend(by_label.values(), by_label.keys(), loc='lower center', ncol=len(by_label), frameon=False, bbox_to_anchor=(0.5, 0.02))
+        if by_label:
+            fig.legend(by_label.values(), by_label.keys(), loc='lower center', ncol=len(by_label), frameon=False, bbox_to_anchor=(0.5, 0.02))
+        
         plt.savefig(os.path.join(out_dir, f"Aggregated_Diurnal_{group_name}.png"), bbox_inches='tight')
         plt.savefig(os.path.join(out_dir, f"Aggregated_Diurnal_{group_name}.svg"), bbox_inches='tight')
         plt.close()
