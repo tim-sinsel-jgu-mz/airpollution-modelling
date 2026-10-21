@@ -578,36 +578,36 @@ if __name__ == "__main__":
     Z_INDEX = 2 
     
     # --- DIRECTORIES ---
-    base_out_dir = r"D:\Berlin_Anonymization_Study_Results"
+    base_out_dir = r"D:\Berlin_Anonymization_Study_Results_new"
     stats_dir = os.path.join(base_out_dir, "Stats")
     os.makedirs(stats_dir, exist_ok=True)
         
     # --- SEASONAL INPUT PATHS CONFIGURATION ---
     seasons_config = {
         "Summer": {
-            "Base": r"Y:\Berlin_Mehringdamm\Mehringdamm_Summer_Base_comp\NetCDF",
+            "Base": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Summer_Base\NetCDF",
             "Methods": {
-                "K2": r"Y:\Berlin_Mehringdamm\Mehringdamm_Summer_K2_comp\NetCDF",
-                "K5": r"Y:\Berlin_Mehringdamm\Mehringdamm_Summer_K5_comp\NetCDF",
-                "K7": r"Y:\Berlin_Mehringdamm\Mehringdamm_Summer_K7_comp\NetCDF",
-                "dptraj20": r"Y:\Berlin_Mehringdamm\Mehringdamm_Summer_dptraj20_comp\NetCDF",
-                "dptraj22": r"Y:\Berlin_Mehringdamm\Mehringdamm_Summer_dptraj22_comp\NetCDF",
-                "dptraj50": r"Y:\Berlin_Mehringdamm\Mehringdamm_Summer_dptraj50_comp\NetCDF",
-                "adatrace_g6": r"Y:\Berlin_Mehringdamm\Mehringdamm_Summer_adatrace_g6_comp\NetCDF",
-                "adatrace_g12": r"Y:\Berlin_Mehringdamm\Mehringdamm_Summer_adatrace_g12_comp\NetCDF"
+                "K2": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Summer_K2\NetCDF",
+                "K5": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Summer_K5\NetCDF",
+                "K7": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Summer_K7\NetCDF",
+                "dptraj20": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Summer_dptraj20_comp\NetCDF",
+                "dptraj22": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Summer_dptraj22\NetCDF",
+                "dptraj50": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Summer_dptraj50\NetCDF",
+                "adatrace_g6": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Summer_adatrace_g6\NetCDF",
+                "adatrace_g12": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Summer_adatrace_g12\NetCDF"
             }
         },
         "Autumn": {
-            "Base": r"Y:\Berlin_Mehringdamm\Mehringdamm_Autumn_Base_comp\NetCDF",
+            "Base": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Autumn_Base\NetCDF",
             "Methods": {
-                "K2": r"Y:\Berlin_Mehringdamm\Mehringdamm_Autumn_K2_comp\NetCDF",
-                "K5": r"Y:\Berlin_Mehringdamm\Mehringdamm_Autumn_K5_comp\NetCDF",
-                "K7": r"Y:\Berlin_Mehringdamm\Mehringdamm_Autumn_K7_comp\NetCDF",
-                "dptraj20": r"Y:\Berlin_Mehringdamm\Mehringdamm_Autumn_dptraj20_comp\NetCDF",
-                "dptraj22": r"Y:\Berlin_Mehringdamm\Mehringdamm_Autumn_dptraj22_comp\NetCDF",
-                "dptraj50": r"Y:\Berlin_Mehringdamm\Mehringdamm_Autumn_dptraj50_comp\NetCDF",
-                "adatrace_g6": r"Y:\Berlin_Mehringdamm\Mehringdamm_Autumn_adatrace_g6_comp\NetCDF",
-                "adatrace_g12": r"Y:\Berlin_Mehringdamm\Mehringdamm_Autumn_adatrace_g12_comp\NetCDF"                
+                "K2": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Autumn_K2\NetCDF",
+                "K5": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Autumn_K5\NetCDF",
+                "K7": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Autumn_K7\NetCDF",
+                "dptraj20": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Autumn_dptraj20\NetCDF",
+                "dptraj22": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Autumn_dptraj22\NetCDF",
+                "dptraj50": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Autumn_dptraj50\NetCDF",
+                "adatrace_g6": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Autumn_adatrace_g6\NetCDF",
+                "adatrace_g12": r"Y:\Berlin_Mehringdamm_new\Mehringdamm_Autumn_adatrace_g12\NetCDF"                
             }
         }
     }
